@@ -16,8 +16,8 @@ class Config:
     PORT = int(os.environ.get('PORT', 3000))
     
     # Serial Configuration
-    DEFAULT_PORT = os.environ.get('DEFAULT_SERIAL_PORT', 'COM1')
-    DEFAULT_BAUDRATE = int(os.environ.get('DEFAULT_BAUDRATE', 57600))
+    DEFAULT_PORT = os.environ.get('DEFAULT_SERIAL_PORT', '/dev/ttyUSB0')
+    DEFAULT_BAUDRATE = int(os.environ.get('DEFAULT_BAUDRATE', 115200))
     
     # RFID Reader Configuration
     DEFAULT_ADDRESS = 0x00
@@ -40,18 +40,11 @@ class Config:
     
     # Profile Configurations
     PROFILE_CONFIGS = {
-        11: "640kHz, FM0, Tari 7.5μs",
-        1: "640kHz, Miller2, Tari 7.5μs",
-        15: "640kHz, Miller4, Tari 7.5μs",
-        12: "320kHz, Miller2, Tari 15μs",
-        3: "320kHz, Miller2, Tari 20μs",
-        5: "320kHz, Miller4, Tari 20μs",
-        7: "250kHz, Miller4, Tari 20μs",
-        13: "160kHz, Miller8, Tari 20μs",
-        50: "640kHz, FM0, Tari 6.25μs",
-        51: "640kHz, Miller2, Tari 6.25μs",
-        52: "426kHz, FM0, Tari 15μs",
-        53: "640kHz, Miller4, Tari 7.5μs"
+        0: "40kHz, FM0, Tari 25μs",
+        1: "250kHz, Miller4, Tari 25μs",
+        2: "300kHz, Miller4, Tari 25μs",
+        3: "400kHz, FM0, Tari 6.25μs",
+        4: "320kHz, Miller4, Tari 25μs"
     }
     
     # Antenna Configuration
