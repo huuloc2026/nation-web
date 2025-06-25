@@ -18,8 +18,6 @@ from zk import (
 # Import configuration
 from config import get_config
 
-
-
 #Nation 
 from nation import NationReader
 
@@ -28,7 +26,7 @@ config = get_config()
 
 app = Flask(__name__)
 app.config.from_object(config)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=True, engineio_logger=True)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=True)
 
 # Global variables
 reader: Optional[serial.Serial] = None
@@ -97,7 +95,6 @@ class RFIDWebController:
     
 
     def start_inventory(self, target: int = 0) -> Dict:
-        """Bắt đầu inventory"""
         global inventory_thread, stop_inventory_flag, detected_tags, inventory_stats
 
         if not self.is_connected:
@@ -107,7 +104,7 @@ class RFIDWebController:
         if inventory_thread and inventory_thread.is_alive():
             logger.info("Inventory đang chạy, dừng trước khi start lại")
             self.stop_inventory()
-            time.sleep(1.0)  # Tăng thời gian chờ để đảm bảo reader ổn định
+            time.sleep(1.0)  # Đảm bảo reader ổn định
 
         try:
             stop_inventory_flag = False
@@ -126,24 +123,18 @@ class RFIDWebController:
                 tag_data = {
                     "epc": tag.get("epc"),
                     "rssi": tag.get("rssi"),
-                    "antenna": tag.get("antenna_id"),
+                    "antenna": tag.get("antenna_id"),  # Always use 'antenna' for frontend
                     "timestamp": time.strftime("%H:%M:%S")
                 }
                 detected_tags.append(tag_data)
-                # Giới hạn số lượng tags hiển thị
                 if len(detected_tags) > config.MAX_TAGS_DISPLAY:
                     detected_tags.pop(0)
                 logger.info(f"📡 Emitting tag_detected via WebSocket: {tag_data}")
                 try:
-                    socketio.emit('tag_detected', tag_data, broadcast=True)
-                    logger.info("✅ WebSocket emit successful with broadcast")
+                    socketio.emit('tag_detected', tag_data)
+                    logger.info("✅ WebSocket emit successful")
                 except Exception as e:
                     logger.error(f"❌ WebSocket emit failed: {e}")
-                    try:
-                        socketio.emit('tag_detected', tag_data)
-                        logger.info("✅ WebSocket emit successful without broadcast")
-                    except Exception as e2:
-                        logger.error(f"❌ WebSocket emit failed again: {e2}")
 
             def inventory_end_callback(reason):
                 logger.info(f"📴 Inventory ended. Reason: {reason}")
@@ -172,7 +163,7 @@ class RFIDWebController:
         except Exception as e:
             logger.error(f"Start inventory error: {e}")
             return {"success": False, "message": f"Lỗi: {str(e)}"}
-      
+    
     def stop_inventory(self) -> Dict:
         """Dừng inventory"""
         global stop_inventory_flag
@@ -189,7 +180,7 @@ class RFIDWebController:
                 # Gửi lệnh stop nhiều lần để đảm bảo reader nhận được
                 for i in range(3):
                     try:
-                        stop_inventory(self.reader)
+                        self.reader.stop_inventory()
                         time.sleep(0.1)
                     except Exception as e:
                         logger.warning(f"Stop command attempt {i+1} failed: {e}")
@@ -199,8 +190,7 @@ class RFIDWebController:
                 
                 # Clear buffer sau khi stop
                 try:
-                    self.reader.reset_input_buffer()
-                    self.reader.reset_output_buffer()
+                    self.reader.uart.flush_input()
                     time.sleep(0.1)
                 except Exception as e:
                     logger.warning(f"Buffer clear warning: {e}")
@@ -220,29 +210,48 @@ class RFIDWebController:
             logger.error(f"Stop inventory error: {e}")
             return {"success": False, "message": f"Lỗi: {str(e)}"}
     
-    def set_power(self, power: int, preserve_config: bool = True) -> Dict:
+    def set_power(self,  antenna_powers: dict[int, int], preserve_config: bool = True) -> Dict:
         """Thiết lập công suất RF"""
         if not self.is_connected:
             return {"success": False, "message": "Chưa kết nối đến reader"}
         
-        if not config.MIN_POWER <= power <= config.MAX_POWER:
-            return {"success": False, "message": f"Công suất phải từ {config.MIN_POWER} đến {config.MAX_POWER} dBm"}
+        # if not config.MIN_POWER <= antenna_powers <= config.MAX_POWER:
+        #     return {"success": False, "message": f"Công suất phải từ {config.MIN_POWER} đến {config.MAX_POWER} dBm"}
         
         try:
             # Set power for all enabled antennas, or just antenna 1 if you want
             # Example: {1: power}
             
-            result = self.reader.configure_reader_power({1: power, 2: power, 3: power, 4: power}, persistence=preserve_config)
-            print(result)
+            result = self.reader.configure_reader_power(antenna_powers, persistence=preserve_config)
+            
             if result:
-                logger.info(f"Set power to {power} dBm")
-                return {"success": True, "message": f"Đã thiết lập công suất: {power} dBm"}
+                logger.info(f"Set power to {antenna_powers} dBm")
+                return {"success": True, "message": f"Đã thiết lập công suất: {antenna_powers} dBm"}
             else:
                 return {"success": False, "message": "Không thể thiết lập công suất"}
         except Exception as e:
             logger.error(f"Set power error: {e}")
             return {"success": False, "message": f"Lỗi: {str(e)}"}
 
+    def get_antenna_power(self) -> Dict:
+        """Lấy công suất antennas"""
+        if not self.is_connected:
+            return {"success": False, "message": "Chưa kết nối đến reader"}
+        
+        try:
+            power_levels = self.reader.query_reader_power()
+            print(power_levels)  # Raw dict output
+            # Pretty print for each antenna
+            if power_levels:
+                for ant, val in power_levels.items():
+                    print(f"  🔧 Antenna {ant}: {val} dBm")
+                self.antenna_power = power_levels
+                return {"success": True, "data": power_levels}
+            else:
+                return {"success": False, "message": "Không thể lấy công suất antennas"}
+        except Exception as e:
+            logger.error(f"Get antenna power error: {e}")
+            return {"success": False, "message": f"Lỗi: {str(e)}"}
   
     def set_buzzer(self, enable: bool) -> Dict:
         """Bật/tắt buzzer"""
@@ -334,26 +343,37 @@ class RFIDWebController:
         except Exception as e:
             logger.error(f"Disable antennas error: {e}")
             return {"success": False, "message": f"Lỗi: {str(e)}"}
-    
-    def get_antenna_power(self) -> Dict:
-        """Lấy công suất antennas"""
+        
+    def set_power_for_antenna(self, antenna: int, power: int, preserve_config: bool = True) -> Dict:
         if not self.is_connected:
             return {"success": False, "message": "Chưa kết nối đến reader"}
-        
         try:
-            power_levels = self.reader.query_reader_power()
-            print(power_levels)  # Raw dict output
-            # Pretty print for each antenna
-            if power_levels:
-                for ant, val in power_levels.items():
-                    print(f"  🔧 Antenna {ant}: {val} dBm")
-                self.antenna_power = power_levels
-                return {"success": True, "data": power_levels}
+            result = self.reader.configure_reader_power({antenna: power}, persistence=preserve_config)
+            if result:
+                logger.info(f"Set power for antenna {antenna} to {power} dBm")
+                return {"success": True, "message": f"Đã thiết lập công suất Antenna {antenna}: {power} dBm"}
             else:
-                return {"success": False, "message": "Không thể lấy công suất antennas"}
+                return {"success": False, "message": "Không thể thiết lập công suất"}
         except Exception as e:
-            logger.error(f"Get antenna power error: {e}")
+            logger.error(f"Set power error: {e}")
             return {"success": False, "message": f"Lỗi: {str(e)}"}
+        
+    def set_power_multi(self, powers: dict, preserve_config: bool = True) -> Dict:
+        if not self.is_connected:
+            return {"success": False, "message": "Chưa kết nối đến reader"}
+        try:
+            # Convert string keys to int
+            powers_int = {int(k): int(v) for k, v in powers.items()}
+            result = self.reader.configure_reader_power(powers_int, persistence=preserve_config)
+            if result:
+                logger.info(f"Set power for all antennas: {powers_int}")
+                return {"success": True, "message": f"Đã thiết lập công suất cho tất cả antennas"}
+            else:
+                return {"success": False, "message": "Không thể thiết lập công suất"}
+        except Exception as e:
+            logger.error(f"Set power error: {e}")
+            return {"success": False, "message": f"Lỗi: {str(e)}"}
+
 # Khởi tạo controller
 rfid_controller = RFIDWebController()
 
@@ -421,14 +441,18 @@ def api_stop_tags_inventory():
 
 @app.route('/api/set_power', methods=['POST'])
 def api_set_power():
-    """API thiết lập công suất"""
     data = request.get_json()
-    power = data.get('power', config.DEFAULT_ANTENNA_POWER)
+    powers = data.get('powers')
     preserve_config = data.get('preserve_config', True)
-    
-    result = rfid_controller.set_power(power, preserve_config)
+    if powers:
+        # Set power for all antennas at once
+        result = rfid_controller.set_power_multi(powers, preserve_config)
+    else:
+        # Fallback: single antenna (legacy)
+        power = data.get('power')
+        antenna = data.get('antenna', 1)
+        result = rfid_controller.set_power_for_antenna(antenna, power, preserve_config)
     return jsonify(result)
-
 @app.route('/api/set_buzzer', methods=['POST'])
 def api_set_buzzer():
     """API thiết lập buzzer"""
@@ -604,7 +628,7 @@ def api_tags_inventory():
     if inventory_thread and inventory_thread.is_alive():
         logger.info("Inventory đang chạy, dừng trước khi start lại")
         rfid_controller.stop_inventory()
-        time.sleep(1.0)  # Tăng thời gian chờ để đảm bảo reader ổn định
+        time.sleep(1.0)  # Đảm bảo reader ổn định
 
     try:
         # Reset trạng thái
@@ -616,115 +640,63 @@ def api_tags_inventory():
         data      = request.get_json()
         q_value   = int(data.get("q_value", 4))
         session   = int(data.get("session", 0))
-        antenna   = int(data.get("antenna", 1))
-        scan_time = int(data.get("scan_time", 10))
+        inventory_flag = int(data.get("inventory_flag", 0))  # 0: Single, 1: Continuous, 2: Fast
+        scan_time = int(data.get("scan_time", 10))  # Not used directly in NationReader, but can be used for sleep
 
-        # Clear buffer và đợi reader ổn định trước khi bắt đầu
-        try:
-            rfid_controller.reader.reset_input_buffer()
-            rfid_controller.reader.reset_output_buffer()
-            time.sleep(0.3)  # Tăng thời gian chờ khi chuyển session
-        except Exception as e:
-            logger.warning(f"Buffer clear warning: {e}")
+        # Cấu hình baseband trước khi inventory
+        if not rfid_controller.reader.configure_baseband(
+            speed=255,  # Or another value if you want to expose this
+            q_value=q_value,
+            session=session,
+            inventory_flag=inventory_flag
+        ):
+            return {"success": False, "message": "Không thể cấu hình baseband"}
 
         # Callback khi có tag mới
-        def tag_callback(tag: RFIDTag):
+        def tag_callback(tag: dict):
             tag_data = {
-                "epc":       tag.epc,
-                "rssi":      tag.rssi,
-                "antenna":   tag.antenna,
+                "epc":       tag.get("epc"),
+                "rssi":      tag.get("rssi"),
+                "antenna":   tag.get("antenna_id"),
                 "timestamp": time.strftime("%H:%M:%S")
             }
             detected_tags.append(tag_data)
             if len(detected_tags) > config.MAX_TAGS_DISPLAY:
                 detected_tags.pop(0)
-            # Emit không có broadcast
             try:
                 socketio.emit("tag_detected", tag_data)
             except Exception as e:
                 logger.error(f"❌ WebSocket emit failed: {e}")
 
-        # Callback khi có stats
-        def stats_callback(read_rate: int, total_count: int):
-            inventory_stats["read_rate"]   = read_rate
-            inventory_stats["total_count"] = total_count
-            try:
-                socketio.emit("stats_update", inventory_stats)
-            except Exception as e:
-                logger.error(f"❌ Stats WebSocket emit failed: {e}")
-
-        # Thread worker: loop liên tục cho đến khi stop_inventory_flag = True
+        # Thread worker: run inventory for scan_time*100ms, then stop
         def inventory_worker():
-            cycle_count = 0
-            switch_target = 0
             try:
-                while not stop_inventory_flag:
-                    cycle_count += 1
-                    logger.info(f"\n--- Starting inventory cycle #{cycle_count} at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
-                    
-                    # Xóa buffer, đợi 0.2s để ổn định
-                    try:
-                        rfid_controller.reader.reset_input_buffer()
-                        time.sleep(0.2)
-                    except Exception as e:
-                        logger.warning(f"Buffer clear warning in cycle {cycle_count}: {e}")
-                    
-                    # Thực hiện 1 lượt scan
-                    if session < 2:
-                        start_tags_inventory(
-                        rfid_controller.reader,
-                        address=config.DEFAULT_ADDRESS,
-                        q_value=q_value,
-                        session=session,
-                        target=0,
-                        antenna=antenna,
-                        scan_time=scan_time,
-                        tag_callback=tag_callback,
-                        stats_callback=stats_callback
-                    )
-                    else:
-                        start_tags_inventory(
-                        rfid_controller.reader,
-                        address=config.DEFAULT_ADDRESS,
-                        q_value=q_value,
-                        session=session,
-                        target=switch_target,
-                        antenna=antenna,
-                        scan_time=scan_time,
-                        tag_callback=tag_callback,
-                        stats_callback=stats_callback
-                        )
-                    switch_target = abs(switch_target-1)
-                    
-                    # Nếu đã được yêu cầu dừng, break
-                    if stop_inventory_flag:
-                        break
-                        
-                    logger.info(f"\n--- Inventory cycle #{cycle_count} completed at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
-                    logger.info("🔄 Starting next cycle immediately...")
-                    
-                    # Không có delay giữa các cycle để quét nhanh nhất có thể
-            
+                rfid_controller.reader.uart.flush_input()
+                rfid_controller.reader.start_inventory(on_tag=tag_callback)
+                logger.info("▶️ Inventory started (custom tags inventory mode)")
+                
+                time.sleep(scan_time * 0.1)
+                rfid_controller.reader.stop_inventory()
+                logger.info("⏹️ Inventory stopped after scan_time")
             except Exception as e:
                 logger.error(f"Tags inventory worker error: {e}")
             finally:
-                logger.info("Tags inventory worker finished (continuous mode)")
+                logger.info("Tags inventory worker finished")
 
         # Khởi thread
         inventory_thread = threading.Thread(target=inventory_worker)
         inventory_thread.daemon = True
         inventory_thread.start()
 
-        logger.info(f"Started continuous tags inventory (Q={q_value}, Session={session}, Antenna={antenna}, Scan={scan_time})")
+        logger.info(f"Started tags inventory (Q={q_value}, Session={session}, Flag={inventory_flag}, Scan={scan_time})")
         return {
             "success": True,
-            "message": f"Tags inventory đã bắt đầu (Q={q_value}, Session={session}, Antenna={antenna}, Scan={scan_time})"
+            "message": f"Tags inventory đã bắt đầu (Q={q_value}, Session={session}, Flag={inventory_flag}, Scan={scan_time})"
         }
 
     except Exception as e:
         logger.error(f"Start tags inventory error: {e}")
         return {"success": False, "message": f"Lỗi: {str(e)}"}
-
 
 
 if __name__ == '__main__':

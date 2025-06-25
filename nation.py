@@ -542,6 +542,8 @@ class NationReader:
                 pid = data[2 + epc_len + 3]
                 if pid == 0x01:
                     rssi = data[2 + epc_len + 4]
+                    if rssi > 127:
+                        rssi -= 256           
             return {
                 "epc": epc,
                 "pc": pc,
@@ -560,6 +562,7 @@ class NationReader:
                  and values are power levels in dBm, or an empty dict on failure.
         """
         try:
+            self.stop_inventory()
             print("🚀 Sending Query Reader Power command...")
             # Use the consistent MID value for querying RFID powers
             command_frame = self.build_frame(MID.QUERY_READER_POWER, payload=b'', rs485=self.rs485)
@@ -617,6 +620,7 @@ class NationReader:
         if not isinstance(antenna_powers, dict):
             print("❌ antenna_powers must be a dictionary of {int: int}.")
             return False
+        
 
         for ant_id, power_dbm in antenna_powers.items():
             if not isinstance(ant_id, int) or not isinstance(power_dbm, int):
@@ -733,7 +737,7 @@ class NationReader:
             frame = self.build_frame(mid=MID.READ_EPC_TAG, payload=payload, rs485=self.rs485)
             self.send(frame)
 
-            print(f"🚀 Inventory started using reader profile {mode}")
+
             self._inventory_thread = threading.Thread(target=self._receive_inventory_loop)
             self._inventory_thread.start()
             return True
@@ -799,7 +803,7 @@ class NationReader:
 
         # Step 4: Wait for confirmation via response or notification
         for attempt in range(10):
-            time.sleep(0.2)
+            # time.sleep(0.2)
             try:
                 raw = self.receive(256)
                 frames = self.extract_valid_frames(raw)
