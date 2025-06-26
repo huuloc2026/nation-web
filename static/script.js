@@ -411,12 +411,7 @@ function showLoading(button, loading) {
   }
 }
 
-// // Event listeners
-// document
-//   .getElementById("powerInput")
-//   .addEventListener("input", function () {
-//     document.getElementById("powerValue").textContent = this.value;
-//   });
+
 
 // Socket.IO events
 socket.on("connect", function () {

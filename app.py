@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, session
 from flask_socketio import SocketIO, emit
+from flask_cors import CORS
 import threading
 import time
 import json
@@ -26,6 +27,7 @@ config = get_config()
 
 app = Flask(__name__)
 app.config.from_object(config)
+CORS(app)  
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=True)
 
 # Global variables
@@ -443,10 +445,11 @@ def api_stop_tags_inventory():
 def api_set_power():
     data = request.get_json()
     powers = data.get('powers')
-    preserve_config = data.get('preserve_config', True)
+    preserve_config = data.get('preserveConfig', True)  # <-- Fix key to match frontend
     if powers:
-        # Set power for all antennas at once
-        result = rfid_controller.set_power_multi(powers, preserve_config)
+        # Convert string keys to int for backend compatibility
+        powers_int = {int(k): int(v) for k, v in powers.items()}
+        result = rfid_controller.set_power_multi(powers_int, preserve_config)
     else:
         # Fallback: single antenna (legacy)
         power = data.get('power')
@@ -478,15 +481,15 @@ def api_set_profile():
     result = rfid_controller.set_profile(profile_num, save_on_power_down)
     return jsonify(result)
 
-@app.route('/api/enable_antennas', methods=['POST'])
-def api_enable_antennas():
-    """API bật antennas"""
-    data = request.get_json()
-    antennas = data.get('antennas', [1])
-    save_on_power_down = data.get('save_on_power_down', True)
-    
-    result = rfid_controller.enable_antennas(antennas, save_on_power_down)
-    return jsonify(result)
+@app.route('/api/get_enabled_antennas', methods=['GET'])
+def api_get_enabled_antennas():
+    if not rfid_controller.is_connected:
+        return jsonify({"success": False, "message": "Chưa kết nối đến reader"})
+    try:
+        ants = rfid_controller.reader.get_enabled_ants()
+        return jsonify({"success": True, "antennas": ants})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
 
 @app.route('/api/disable_antennas', methods=['POST'])
 def api_disable_antennas():
@@ -701,4 +704,4 @@ def api_tags_inventory():
 
 if __name__ == '__main__':
     logger.info(f"Starting RFID Web Control Panel on {config.HOST}:{config.PORT}")
-    socketio.run(app, debug=config.DEBUG, host=config.HOST, port=config.PORT) 
+    socketio.run(app, debug=config.DEBUG, host=config.HOST, port=config.PORT)

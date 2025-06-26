@@ -1520,3 +1520,104 @@ class NationReader:
             return {}
 
 
+    def write_epc_tag(
+        self,
+        antenna_mask: int,
+        start_word_addr: int,
+        epc_data: bytes,
+        access_password: int = 0,
+        match_area: int = None,
+        match_addr: int = None,
+        match_bitlen: int = None,
+        match_data: bytes = None
+    ) -> dict:
+        """
+        Write EPC data to a tag.
+        :param antenna_mask: 4-byte mask for antennas (bitmask, e.g., 0x00000001 for Ant 1)
+        :param start_word_addr: Word address to start writing (usually 2 for EPC area)
+        :param epc_data: EPC data as bytes (must be even length)
+        :param access_password: Optional 4-byte password (default 0)
+        :param match_area: Optional area for matching (1=EPC, 2=TID, 3=USER)
+        :param match_addr: Optional match start address
+        :param match_bitlen: Optional match bit length
+        :param match_data: Optional match data bytes
+        :return: dict with result and error info
+        """
+        try:
+            self.stop_inventory()
+            if not self.is_idle():
+                return {"success": False, "error": "Reader not idle"}
+
+            # --- Build payload ---
+            payload = b""
+            payload += antenna_mask.to_bytes(4, "big")  # Antenna mask
+            payload += b"\x01"  # Data area: 1 = EPC
+            payload += start_word_addr.to_bytes(2, "big")  # Start word address
+            payload += epc_data  # Data content (must be even length)
+
+            # Optional: Access password
+            if access_password:
+                payload += b"\x02"  # PID for password
+                payload += (4).to_bytes(1, "big")
+                payload += access_password.to_bytes(4, "big")
+
+            # Optional: Match parameter
+            if (
+                match_area is not None
+                and match_addr is not None
+                and match_bitlen is not None
+                and match_data is not None
+            ):
+                match_payload = (
+                    bytes([match_area])
+                    + match_addr.to_bytes(2, "big")
+                    + bytes([match_bitlen])
+                    + match_data
+                )
+                payload += b"\x01"  # PID for match
+                payload += len(match_payload).to_bytes(1, "big")
+                payload += match_payload
+
+            # --- Send frame ---
+            frame = self.build_frame(mid=0x11, payload=payload, rs485=self.rs485)
+            self.uart.flush_input()
+            self.uart.send(frame)
+            time.sleep(0.1)
+            raw = self.uart.receive(64)
+            if not raw:
+                return {"success": False, "error": "No response from reader"}
+
+            resp = self.parse_frame(raw)
+            if resp["mid"] != 0x11:
+                return {"success": False, "error": f"Unexpected MID: {resp['mid']}"}
+
+            result_code = resp["data"][0]
+            result_map = {
+                0: "Write successful",
+                1: "Antenna port parameter error",
+                2: "Choosing parameter error",
+                3: "Writing parameter error",
+                4: "CRC check error",
+                5: "Insufficient power",
+                6: "Data area overflow",
+                7: "Data area locked",
+                8: "Access password error",
+                9: "Other tag errors",
+                10: "Tag lost",
+                11: "Reader sending command error",
+            }
+            result_msg = result_map.get(result_code, f"Unknown error ({result_code})")
+
+            # Optional: Failed word address
+            failed_addr = None
+            if len(resp["data"]) >= 4 and resp["data"][1] == 0x01:
+                failed_addr = int.from_bytes(resp["data"][2:4], "big")
+
+            return {
+                "success": result_code == 0,
+                "result_code": result_code,
+                "result_msg": result_msg,
+                "failed_addr": failed_addr,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}

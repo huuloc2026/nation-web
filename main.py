@@ -48,30 +48,30 @@ def main():
     if not reader.Connect_Reader_And_Initialize():
         print("❌ Initialization failed.")
         return
-    reader.configure_baseband(speed=255, q_value=1, session=2, inventory_flag=0) 
+    # reader.configure_baseband(speed=255, q_value=1, session=2, inventory_flag=0) 
     
     
-    # infor= reader.query_baseband_profile()
-    # print("📡 Baseband profile queried successfully.",infor)
-    
-    
-
-    # session = reader.get_session()
-
+    # # infor= reader.query_baseband_profile()
+    # # print("📡 Baseband profile queried successfully.",infor)
     
     
 
-    
-    print("\n📤 Sending all antenna configuration to reader...")
-    reader.send_all_ant_config()
+    # # session = reader.get_session()
 
     
-    # print("✅ Danh sách anten đang bật:", reader.get_enabled_ants())
     
-    info = reader.Query_Reader_Information()
-    print("📡 Reader Info:")
-    for k, v in info.items():
-        print(f"  {k}: {v}")
+
+    
+    # print("\n📤 Sending all antenna configuration to reader...")
+    # reader.send_all_ant_config()
+
+    
+    # # print("✅ Danh sách anten đang bật:", reader.get_enabled_ants())
+    
+    # info = reader.Query_Reader_Information()
+    # print("📡 Reader Info:")
+    # for k, v in info.items():
+    #     print(f"  {k}: {v}")
 
 
     setPower = {
@@ -81,18 +81,32 @@ def main():
         4:1
     }
     reader.configure_reader_power(setPower, persistence=True)
-    powers = reader.query_reader_power()
-    for ant in range(1, 5):
-        val = powers.get(ant)
-        if val is not None:
-            print(f"  🔧 Antenna {ant}: {val} dBm")
-        else:
-            print(f"  ⚠️ Antenna {ant}: N/A")
+    # powers = reader.query_reader_power()
+    # for ant in range(1, 5):
+    #     val = powers.get(ant)
+    #     if val is not None:
+    #         print(f"  🔧 Antenna {ant}: {val} dBm")
+    #     else:
+    #         print(f"  ⚠️ Antenna {ant}: N/A")
     
-    # profilemock = reader.select_profile(0)
-    # print("📊 Chọn profile:", profilemock)
+    # # profilemock = reader.select_profile(0)
+    # # print("📊 Chọn profile:", profilemock)
 
- 
+        # === TEST: Write EPC Tag ===
+    print("\n✍️ Testing write_epc_tag...")
+    # Example EPC data (must be even length, word-aligned)
+    new_epc = bytes.fromhex("3000112233445566")  # adjust as needed
+    write_result = reader.write_epc_tag(
+        antenna_mask=0x00000001,
+        start_word_addr=2,
+        epc_data=new_epc,
+        access_password=0,
+        match_area=None,
+        match_addr=None,
+        match_bitlen=None,
+        match_data=None
+    )
+    print("Write EPC result:", write_result)
     try:
         print("▶️ Bắt đầu đọc tag (ấn Ctrl+C để dừng)...")
     
