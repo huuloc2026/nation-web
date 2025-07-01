@@ -4,12 +4,16 @@ import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Sidebar } from "./components/Sidebar"
 import { TagTable } from "./components/TagTable"
-import { connectReader, disconnectReader, startInventory, stopInventory } from "./api/rfid"
+import { connectReader, disconnectReader, startInventory, stopInventory, WriteEPCtag } from "./api/rfid"
 import { toast } from "sonner"
 import { io, Socket } from "socket.io-client"
 
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { InventoryControl } from "./components/InventoryControl"
+import { TableWriteTag } from "./components/TableWriteTag"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@radix-ui/react-label"
 
 // Types
 export interface Tag {
@@ -41,6 +45,13 @@ export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
 
+  const [tableWriteTag, setTableWriteTag] = useState<boolean>(true)
+  const [writeDialogOpen, setWriteDialogOpen] = useState(false)
+  const [epcInput, setEpcInput] = useState("")
+  const [writeParams, setWriteParams] = useState<any>(null)
+  const [writeResult, setWriteResult] = useState<any>(null)
+  const [writeLoading, setWriteLoading] = useState(false)
+
   // Antenna settings
   const [antennaSettings, setAntennaSettings] = useState<AntennaSettings>({
     antenna1: true,
@@ -64,9 +75,8 @@ export default function Dashboard() {
     
     socketRef.current = socket
     socket.on("connect", () => console.log("🔌 Socket connected:", socket.id))
-socket.on("disconnect", (r) => console.warn("⚠️  disconnected:", r))
-socket.on("connect_error", (err) => console.error("❌ connect_error", err.message))
-
+    socket.on("disconnect", (r) => console.warn("⚠️  disconnected:", r))
+    socket.on("connect_error", (err) => console.error("❌ connect_error", err.message))
 
     // Handle tag_detected event
     socket.on("tag_detected", (tagData: any) => {
@@ -208,6 +218,56 @@ socket.on("connect_error", (err) => console.error("❌ connect_error", err.messa
     }))
   }
 
+  const handleWriteEPC = async () => {
+    setWriteDialogOpen(true)
+    setEpcInput("")
+    setWriteParams(null)
+    setWriteResult(null)
+  }
+
+  const handleSubmitWrite = async () => {
+    if (!epcInput.trim()) {
+      toast("EPC không được để trống", { style: { background: "#ef4444", color: "#fff" } })
+      return
+    }
+    setWriteLoading(true)
+    // Example: always use antenna 1, EPC area, start word 2
+    const params = {
+      antennaMask: 1,
+      dataArea: 1,
+      startWord: 2,
+      epcHex: epcInput.trim().toUpperCase(),
+    }
+    setWriteParams(params)
+    // TODO: Call actual API to write EPC and get result
+    // call writeEPC(params)
+    // For demo purposes, we simulate a successful write after 1.2 seconds
+    // You can replace this with actual API call logic
+   
+    const data = await WriteEPCtag(params.antennaMask, params.dataArea, params.startWord, params.epcHex)
+    console.log("Write EPC result:", data)  
+
+    
+    // Simulate result for demo
+
+
+    setTimeout(() => {
+      setWriteResult({
+        success: true,
+        result_code: 0,
+        result_msg: "Write successfully",
+        failed_addr: null,
+      })
+
+      toast("Ghi EPC thành công", {
+        description: "EPC đã được ghi vào tag",
+      })
+      setWriteDialogOpen(false) // Close dialog after success
+
+      setWriteLoading(false)
+    }, 1200)
+  }
+
   return (
     <div className="flex h-screen bg-background">
       {/* Desktop Sidebar */}
@@ -298,6 +358,7 @@ socket.on("connect_error", (err) => console.error("❌ connect_error", err.messa
                   onStart={handleStartInventory}
                   onStop={handleStopInventory}
                   onClear={handleClear}
+                  writeEPC={handleWriteEPC}
                 />
               </div>
             </div>
@@ -305,60 +366,51 @@ socket.on("connect_error", (err) => console.error("❌ connect_error", err.messa
             {/* Bottom Section: Tags Table */}
             <div className="flex-1 p-4 overflow-auto">
               {tags.length === 0 ? (
-                <div className="text-center text-muted py-8">
-                  Chưa có tags được phát hiện
+                <div className="text-center text-muted-foreground py-8">
+                  No EPC tags detected
                 </div>
               ) : (
                 <TagTable tags={tags} />
               )}
             </div>
+
+            {/* Write EPC Dialog */}
+            <Dialog open={writeDialogOpen} onOpenChange={setWriteDialogOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Ghi EPC vào Tag</DialogTitle>
+                </DialogHeader>
+                <DialogDescription>
+        
+           </DialogDescription>
+                <div className="space-y-2">
+                  <Label htmlFor="epc-input">EPC </Label>
+                  <Input
+                    id="epc-input"
+                    value={epcInput}
+                    onChange={e => setEpcInput(e.target.value)}
+                    placeholder="EPC"
+                    disabled={writeLoading}
+                    autoFocus
+                  />
+                </div>
+                <DialogFooter>
+                  <Button onClick={handleSubmitWrite} disabled={writeLoading || !epcInput.trim()}>
+                    {writeLoading ? "Đang ghi..." : "Ghi EPC"}
+                  </Button>
+                  <Button variant="outline" onClick={() => setWriteDialogOpen(false)} disabled={writeLoading}>
+                    Đóng
+                  </Button>
+                </DialogFooter>
+                {(writeParams || writeResult) && (
+                  <div className="mt-4">
+                    <TableWriteTag params={writeParams || {}} result={writeResult} />
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
-
-        {/* Mobile Main Content */}
-        <main className="flex-1 overflow-auto p-4 lg:hidden">
-          <div className="space-y-4">
-            {/* Detected Tags + Control Buttons - Mobile */}
-            <div className="grid grid-cols-1 gap-4">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg">Detected Tags</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-3 gap-4 text-center">
-                    <div className="space-y-1">
-                      <div className="text-2xl font-bold text-primary">{detectedTags}</div>
-                      <div className="text-xs text-muted-foreground">Detected</div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-2xl font-bold">{totalTags}</div>
-                      <div className="text-xs text-muted-foreground">Total</div>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-lg font-mono font-bold tracking-wider">{timer}</div>
-                      <div className="text-xs text-muted-foreground">Timer</div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-              <InventoryControl
-                isInventoryRunning={isInventoryRunning}
-                isConnected={isConnected}
-                onStart={handleStartInventory}
-                onStop={handleStopInventory}
-                onClear={handleClear}
-              />
-            </div>
-            {/* Tags Table - Mobile */}
-            {tags.length === 0 ? (
-              <div className="text-center text-muted py-8">
-                Chưa có tags được phát hiện
-              </div>
-            ) : (
-              <TagTable tags={tags} mobile />
-            )}
-          </div>
-        </main>
       </div>
     </div>
   )

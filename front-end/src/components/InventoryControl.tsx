@@ -7,6 +7,8 @@ interface InventoryControlProps {
   onStart: () => void
   onStop: () => void
   onClear: () => void
+  writeEPC?: () => void
+  exportCSV?: () => void
 }
 
 export function InventoryControl({
@@ -15,6 +17,8 @@ export function InventoryControl({
   onStart,
   onStop,
   onClear,
+  writeEPC,
+  exportCSV 
 }: InventoryControlProps) {
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -42,11 +46,11 @@ export function InventoryControl({
         <Trash2 className="h-4 w-4 mr-2" />
         Clear
       </Button>
-      <Button variant="outline" size="sm" onClick={()=>{alert("TODO:EXPORTED")}} className="w-full">
+      <Button variant="outline" size="sm" onClick={exportCSV} className="w-full">
         <FolderUp  className="h-4 w-4 mr-2" />
         Export CSV
       </Button>
-      <Button variant="outline" size="sm" onClick={()=>{alert("TODO:EXPORTED")}} className="w-full">
+      <Button variant="outline" size="sm" onClick={writeEPC} className="w-full">
         <PenLine  className="h-4 w-4 mr-2" />
        Write EPC
       </Button>

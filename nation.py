@@ -1,11 +1,11 @@
 import serial
-
+import serial.tools.list_ports
 import time
 
 import threading
 from enum import IntEnum, unique
 from typing import Callable, Optional,Tuple
-
+import struct
 # === Constants ===
 CRC16_CCITT_INIT = 0x0000
 CRC16_CCITT_POLY = 0x8005
@@ -146,7 +146,7 @@ class MID(IntEnum):
     QUERY_READER_POWER = 0x0202
     SET_READER_POWER_CALIBRATION = 0x0103
     # RFID Capability
-    QUERY_RFID_ABILITY = (0x05 << 8) | 0x00
+    # QUERY_RFID_ABILITY = (0x05 << 8) | 0x00
     
     
     # Buzzer Control
@@ -154,8 +154,8 @@ class MID(IntEnum):
 
 
 class NationReader:
-    DEFAULT_PORT = "/dev/ttyUSB0"
-    DEFAULT_BAUDRATE = 115200
+    # DEFAULT_PORT = "/dev/ttyUSB1"
+    # DEFAULT_BAUDRATE = 115200
     DEFAULT_TIMEOUT = 0.5
 
     @classmethod
@@ -186,7 +186,34 @@ class NationReader:
 
     def receive(self, size: int) -> bytes:
         return self.uart.receive(size)
+    
+    @staticmethod
+    def auto_detect_port() -> str | None:
+        """
+        Scan all available serial ports and try to detect a NationReader.
+        Returns the port name if found, else None.
+        Cross-platform: works for Windows, Linux, Mac.
+        """
+        try:
+            ports = list(serial.tools.list_ports.comports())
+            
+            if not ports:
+                return None
+            # Prefer USB serial ports, fallback to first available
+            usb_ports = [p.device for p in ports if "USB" in p.device or "usb" in p.device or "ttyACM" in p.device]
+            if usb_ports:
+                return usb_ports[0]
+            # On Windows, COM ports are common
+            com_ports = [p.device for p in ports if p.device.upper().startswith("COM")]
+            if com_ports:
+                return com_ports[0]
+            
+            return ports[0].device
+        except Exception as e:
+            print(f"❌ Error in auto_detect_port: {e}")
+            return None
 
+        
   
     @staticmethod
     def crc16_ccitt(data: bytes) -> int:
@@ -220,7 +247,7 @@ class NationReader:
         crc_bytes = cls.crc16_ccitt(frame_content).to_bytes(2, 'big')
 
         return frame_header + frame_content + crc_bytes
- 
+    
 
     @classmethod
     def build_pcw(cls, category: int, mid: int, rs485=False, notify=False) -> int:
@@ -542,8 +569,7 @@ class NationReader:
                 pid = data[2 + epc_len + 3]
                 if pid == 0x01:
                     rssi = data[2 + epc_len + 4]
-                    if rssi > 127:
-                        rssi -= 256           
+                          
             return {
                 "epc": epc,
                 "pc": pc,
@@ -696,23 +722,23 @@ class NationReader:
     def is_inventory_running(self):
         return self._inventory_running
 
-    def start_inventory(self, on_tag=None, on_inventory_end=None):
-        """
-        Bắt đầu inventory. Gán callback nếu cần:
-        - on_tag(tag: dict)
-        - on_inventory_end(reason: int)
-        """
-        self._inventory_running = True
-        self._on_tag = on_tag
-        self._on_inventory_end = on_inventory_end
+    # def start_inventory(self, on_tag=None, on_inventory_end=None):
+    #     """
+    #     Bắt đầu inventory. Gán callback nếu cần:
+    #     - on_tag(tag: dict)
+    #     - on_inventory_end(reason: int)
+    #     """
+    #     self._inventory_running = True
+    #     self._on_tag = on_tag
+    #     self._on_inventory_end = on_inventory_end
 
-        payload = self.build_epc_read_payload()
-        frame = self.build_frame(mid=MID.READ_EPC_TAG, payload=payload)
-        self.send(frame)
-        print("🚀 Inventory started")
+    #     payload = self.build_epc_read_payload()
+    #     frame = self.build_frame(mid=MID.READ_EPC_TAG, payload=payload,rs485=self.rs485)
+    #     self.send(frame)
+    #     print("🚀 Inventory started")
 
-        self._inventory_thread = threading.Thread(target=self._receive_inventory_loop)
-        self._inventory_thread.start()
+    #     self._inventory_thread = threading.Thread(target=self._receive_inventory_loop)
+    #     self._inventory_thread.start()
 
 
     def start_inventory_with_mode(self, mode: int = 0, callback=None) -> bool:
@@ -728,7 +754,10 @@ class NationReader:
             return False
 
         try:
-            self.uart.flush_input()
+            if not self.select_profile(mode):
+                print(f"❌ Failed to select profile {mode}")
+                return False
+            
             self._inventory_running = True
             self._on_tag = callback
             self._on_inventory_end = None
@@ -736,9 +765,9 @@ class NationReader:
             payload = self.build_epc_read_payload()
             frame = self.build_frame(mid=MID.READ_EPC_TAG, payload=payload, rs485=self.rs485)
             self.send(frame)
+            print("🚀 Inventory started")
 
-
-            self._inventory_thread = threading.Thread(target=self._receive_inventory_loop)
+            self._inventory_thread = threading.Thread(target=self._receive_inventory_loop_optimized)
             self._inventory_thread.start()
             return True
         except Exception as e:
@@ -746,10 +775,55 @@ class NationReader:
             return False
 
 
+    def _receive_inventory_loop_optimized(self):
+        """
+        Nhận dữ liệu inventory tối ưu: buffer, tách frame, không bỏ sót tag.
+        """
+        buffer = b""
+        while self._inventory_running:
+            try:
+                raw = self.receive(128)  # Đọc nhiều bytes hơn/lần
+                if not raw:
+                    time.sleep(0.01)
+                    continue
+                buffer += raw
+                frames = self.extract_valid_frames(buffer)
+                # Xóa khỏi buffer các bytes đã xử lý thành frame
+                if frames:
+                    last_frame = frames[-1]
+                    idx = buffer.find(last_frame) + len(last_frame)
+                    buffer = buffer[idx:]
+
+                for frame in frames:
+                    try:
+                        parsed = self.parse_frame(frame)
+                        mid = parsed["mid"]
+                        if mid == 0x00:  # EPC tag
+                            tag = self.parse_epc(parsed['data'])
+                            if "error" in tag:
+                                # print(f"⚠️ Parse error: {tag['error']}")
+                                continue
+                            else:
+                                if self._on_tag:
+                                    self._on_tag(tag)
+                        elif mid in MID.all_read_end_mids():
+                            reason = parsed['data'][0] if parsed['data'] else None
+                            print(f"✅ Inventory ended. Reason: {reason}")
+                            if self._on_inventory_end:
+                                self._on_inventory_end(reason)
+                            self._inventory_running = False
+                            return
+                    except Exception as e:
+                        # print(f"⚠️ Frame parse error: {e}")
+                        continue
+            except Exception as e:
+                print(f"⚠️ Error in inventory loop: {e}")
+                continue
+
     def _receive_inventory_loop(self):
         while self._inventory_running:
             try:    
-                raw = self.receive(64)
+                raw = self.receive(128)
                 if not raw:
                     continue
 
@@ -824,7 +898,7 @@ class NationReader:
                                 print(f"⚠️ Reader responded: STOP error code {result:#02x}")
                                 return False
 
-                        elif mid in MID.all_read_end_mids():
+                        elif mid in NationReader.all_read_end_mids():
                             reason = data[0] if data else -1
                             if reason == 1:
                                 print("✅ Read end notification: stopped by STOP command.")
@@ -842,96 +916,470 @@ class NationReader:
         print("❌ STOP failed: no valid response or reading end notification after 10 attempts.")
         return False
 
+    @staticmethod
+    def all_read_end_mids():
+        return [0x01, 0x21, 0x31]
 
+    ################################################################################
+    #                           WRITE EPC TAG                                      #
+    ################################################################################
+
+    def write_epc_tag(
+        self,
+        epc_hex: str,
+        antenna_id: int = 1,
+        match_epc_hex: Optional[str] = None,
+        access_password: Optional[int] = None,
+        start_word: int = 2,
+        timeout: float = 2.0,
+    ) -> dict:
+        """
+        Write an EPC value to a tag.
+        :param epc_hex: EPC value as hex string (e.g. 'ABCD9999')
+        :param antenna_id: Antenna port (1-based)
+        :param match_epc_hex: Optional EPC hex string to match before writing
+        :param access_password: Optional access password (U32)
+        :param start_word: Word address in EPC area (default 2)
+        :param timeout: Timeout for response
+        :return: dict with success, result_code, result_msg, failed_addr
+        """
+        try:
+            # 1. Ensure reader is idle
+            self.stop_inventory()
+            self.uart.flush_input()
+            time.sleep(0.2)
+
+            # 2. Build payload
+            payload = bytearray()
+            # Antenna mask (U32, big-endian)
+            antenna_mask = 1 << (antenna_id - 1)
+            payload += antenna_mask.to_bytes(4, "big")
+            # Data area (EPC = 0x01)
+            payload += b"\x01"
+            # Word starting address (U16, big-endian)
+            payload += start_word.to_bytes(2, "big")
+            # Data content: length (U16) + EPC bytes
+            epc_bytes = bytes.fromhex(epc_hex)
+            payload += len(epc_bytes).to_bytes(2, "big")
+            payload += epc_bytes
+
+            # Optional: match parameter (PID 0x01)
+            if match_epc_hex:
+                match_bytes = bytes.fromhex(match_epc_hex)
+                # PID (0x01), length (U16), content
+                # Content: [area=0x01][start_addr=0x0002][bit_len][data]
+                match_area = 0x01
+                match_start = start_word
+                match_bitlen = len(match_bytes) * 8
+                match_content = (
+                    bytes([match_area]) +
+                    match_start.to_bytes(2, "big") +
+                    bytes([match_bitlen]) +
+                    match_bytes
+                )
+                payload += b"\x01" + len(match_content).to_bytes(2, "big") + match_content
+
+            # Optional: access password (PID 0x02)
+            if access_password is not None:
+                payload += b"\x02\x00\x04" + access_password.to_bytes(4, "big")
+
+            # 3. Build frame
+            frame = self.build_frame(mid=0x0211, payload=payload, rs485=self.rs485)
+            print(f"📤 Sending write frame: {frame.hex().upper()}")
+
+            # 4. Send frame
+            self.send(frame)
+
+            # 5. Wait for response
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                raw = self.receive(256)
+                if not raw:
+                    continue
+                try:
+                    frames = self.extract_valid_frames(raw)
+                except Exception as e:
+                    print(f"⚠️ Frame extraction error: {e}")
+                    continue
+                for f in frames:
+                    try:
+                        resp = self.parse_frame(f)
+                    except Exception as e:
+                        print(f"⚠️ Frame parse error: {e}")
+                        continue
+                    print(f"📥 [WRITE-EPC-TAG] Received frame: MID={resp['mid']:02X}, Data={resp['data'].hex()}")
+                    # Success response
+                    if resp["mid"] == 0x11:
+                        data = resp["data"]
+                        result = data[0]
+                        result_map = {
+                            0x00: "Write successful",
+                            0x01: "Antenna parameter error",
+                            0x02: "Match parameter error",
+                            0x03: "Write parameter error",
+                            0x04: "CRC check error",
+                            0x05: "Insufficient power",
+                            0x06: "Data area overflow",
+                            0x07: "Data area locked",
+                            0x08: "Password error",
+                            0x09: "Other tag error",
+                            0x0A: "Tag lost",
+                            0x0B: "Reader send error",
+                        }
+                        failed_addr = None
+                        # Optional: failed word address (PID 0x01, U16)
+                        if len(data) >= 4 and data[1] == 0x01 and data[2] == 0x02:
+                            failed_addr = int.from_bytes(data[3:5], "big")
+                        return {
+                            "success": result == 0x00,
+                            "result_code": result,
+                            "result_msg": result_map.get(result, "Unknown error"),
+                            "failed_addr": failed_addr,
+                        }
+                    # Error/illegal instruction
+                    elif resp["mid"] == 0x00:
+                        error_code = resp["data"][0] if resp["data"] else -1
+                        error_map = {
+                            0x01: "Unsupported instruction",
+                            0x02: "CRC or mode error",
+                            0x03: "Parameter error",
+                            0x04: "Busy",
+                            0x05: "Invalid state",
+                        }
+                        return {
+                            "success": False,
+                            "result_code": error_code,
+                            "result_msg": f"Reader error: {error_map.get(error_code, f'Unknown error code 0x{error_code:02X}')}",
+                            "failed_addr": None,
+                        }
+            # Timeout
+            return {
+                "success": False,
+                "result_code": -2,
+                "result_msg": "Timeout waiting for write response",
+                "failed_addr": None,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "result_code": -99,
+                "result_msg": f"Exception: {e}",
+                "failed_addr": None,
+            }
+
+    def write_epc_tag_auto(
+        self,
+        new_epc_hex: str,
+        match_epc_hex: Optional[str] = None,
+        antenna_id: int = 1,
+        access_password: Optional[int] = None,
+        timeout: float = 2.0,
+    ) -> dict:
+        """
+        Write new EPC to tag. Automatically calculates start_word and PC bits.
+        :param new_epc_hex: New EPC hex string, e.g. '4321'
+        :param match_epc_hex: EPC to match, optional
+        :param antenna_id: Antenna number (1-based)
+        :param access_password: Optional password
+        :param timeout: Timeout in seconds
+        """
+        try:
+            self.stop_inventory()
+            self.uart.flush_input()
+            time.sleep(0.2)
+
+            # Step 1: Format EPC content
+            epc_hex = new_epc_hex.strip().upper()
+            word_len = (len(epc_hex) + 3) // 4  # Word count (4 hex chars = 2 bytes)
+            pc_bits = word_len << 11  # PC word: upper 5 bits = word_len
+            pc_hex = f"{pc_bits:04X}"
+            full_epc_hex = pc_hex + epc_hex.ljust(word_len * 4, '0')
+            epc_bytes = bytes.fromhex(full_epc_hex)
+
+            # Step 2: Build payload
+            payload = bytearray()
+            antenna_mask = 1 << (antenna_id - 1)
+            payload += antenna_mask.to_bytes(4, "big")  # Antenna mask
+            payload += b"\x01"  # EPC area
+            payload += (1).to_bytes(2, "big")  # start_word = 1
+            payload += len(epc_bytes).to_bytes(2, "big")
+            payload += epc_bytes
+
+            # Step 3: Optional match EPC filter
+            if match_epc_hex:
+                match_hex = match_epc_hex.strip().upper()
+                match_bytes = bytes.fromhex(match_hex)
+                bit_len = len(match_bytes) * 8
+                match_content = (
+                    b"\x01" +  # area = EPC
+                    (1).to_bytes(2, "big") +  # start_word = 1
+                    bytes([bit_len]) +
+                    match_bytes
+                )
+                payload += b"\x01" + len(match_content).to_bytes(2, "big") + match_content
+
+            # Step 4: Optional password
+            if access_password is not None:
+                payload += b"\x02\x00\x04" + access_password.to_bytes(4, "big")
+
+            # Step 5: Build & send frame
+            frame = self.build_frame(mid=0x0211, payload=payload, rs485=self.rs485)
+            print(f"📤 Write EPC frame: {frame.hex().upper()}")
+            self.send(frame)
+
+            # Step 6: Await response
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                raw = self.receive(256)
+                if not raw:
+                    continue
+                try:
+                    frames = self.extract_valid_frames(raw)
+                except Exception as e:
+                    print(f"⚠️ Frame extract error: {e}")
+                    continue
+                for f in frames:
+                    try:
+                        resp = self.parse_frame(f)
+                    except Exception as e:
+                        print(f"⚠️ Frame parse error: {e}")
+                        continue
+                    print(f"📥 Write-EPC response: MID={resp['mid']:02X}, Data={resp['data'].hex()}")
+                    if resp["mid"] == 0x11:
+                        result = resp["data"][0]
+                        failed_addr = (
+                            int.from_bytes(resp["data"][3:5], "big")
+                            if len(resp["data"]) >= 5 and resp["data"][1] == 0x01
+                            else None
+                        )
+                        result_map = {
+                            0x00: "Write successful",
+                            0x01: "Antenna error",
+                            0x02: "Match error",
+                            0x03: "Write parameter error",
+                            0x04: "CRC error",
+                            0x05: "Low power",
+                            0x06: "Overflow",
+                            0x07: "Locked",
+                            0x08: "Password error",
+                            0x09: "Tag error",
+                            0x0A: "Tag lost",
+                            0x0B: "Send error",
+                        }
+                        return {
+                            "success": result == 0x00,
+                            "result_code": result,
+                            "result_msg": result_map.get(result, "Unknown error"),
+                            "failed_addr": failed_addr,
+                        }
+                    elif resp["mid"] == 0x00:
+                        error_code = resp["data"][0]
+                        return {
+                            "success": False,
+                            "result_code": error_code,
+                            "result_msg": f"Reader error: {error_code:02X}",
+                            "failed_addr": None,
+                        }
+            return {
+                "success": False,
+                "result_code": -2,
+                "result_msg": "Timeout waiting for write response",
+                "failed_addr": None,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "result_code": -99,
+                "result_msg": f"Exception: {e}",
+                "failed_addr": None,
+            }
+
+
+    def write_to_target_tag(
+        self,
+        target_tag_epc: str,
+        new_epc_hex: str,
+        access_pwd: int = None,
+        overwrite_pc: bool = False,
+        prefix_words: int = 0,
+        timeout: float = 2.0,
+        scan_timeout: float = 2.0,
+    ):
+        """
+        Inventory until `target_tag_epc` is seen (up to `scan_timeout`),
+        then write `new_epc_hex` to it, using validated EPC and calculated start word.
+        """
+        print(f"🔍 Scanning for tag with EPC '{target_tag_epc}' (up to {scan_timeout}s) …")
+
+        found_event = threading.Event()
+
+        def tag_callback(tag: dict):
+            epc = tag.get("epc", "").upper()
+            print(f"👀 Tag seen: {epc}")
+            if epc == target_tag_epc.upper():
+                print(
+                    f"  ✅ Found target tag: EPC={epc}  "
+                    f"(RSSI={tag.get('rssi')}, Antenna={tag.get('antenna_id')})"
+                )
+                found_event.set()
+
+        # 1 · Start inventory in a non-blocking way
+        self.start_inventory_with_mode(mode=0, callback=tag_callback)
+        time.sleep(10)
+        
+        try:
+            if not found_event.wait(timeout=scan_timeout):
+                print(
+                    f"❌ Tag '{target_tag_epc}' not found within {scan_timeout}s. "
+                    "Place the tag closer to the antenna and try again."
+                )
+                return
+
+            # 2 · Validate EPCs and calculate start word
+            try:
+                validated_new_epc = self.validate_epc_hex(new_epc_hex)
+                validated_match_epc = self.validate_epc_hex(target_tag_epc)
+            except Exception as e:
+                print(f"❌ EPC validation error: {e}")
+                return
+
+            start_word = self.calculate_start_word(new_epc_hex, overwrite_pc=overwrite_pc, prefix_words=prefix_words)
+
+            # 3 · Write
+            print(f"📝 Writing new EPC '{new_epc_hex}' (start_word={start_word}) …")
+            result = self.write_epc_tag(
+                epc_hex=new_epc_hex,
+                antenna_id=1,
+                match_epc_hex=target_tag_epc,   # match old EPC
+                access_password=access_pwd,
+                start_word=start_word,
+                timeout=timeout,
+            )
+            print("Write EPC result:", result)
+
+            # 4 · Post-write verification
+            if result.get("success"):
+                print("🔄 Verifying new EPC …")
+                # quick re-scan for the *new* EPC
+                verified_event = threading.Event()
+
+                def verify_cb(tag):
+                    if tag.get("epc", "").upper() == new_epc_hex.upper():
+                        verified_event.set()
+
+                self.start_inventory_with_mode(mode=0, callback=verify_cb)
+                if verified_event.wait(timeout=1.5):
+                    print("✅ Verification OK — tag now reports new EPC.")
+                else:
+                    print("⚠️  Write may have succeeded, but tag not seen with new EPC yet.")
+                self.stop_inventory()
+            else:
+                print("⚠️  Write failed; no verification performed.")
+
+        finally:
+            # Ensure inventory is stopped if any exception occurs
+            self.stop_inventory()
+   
+    @staticmethod   
+    def validate_epc_hex(epc_hex: str) -> bytes:
+        """
+        Validates and converts EPC hex string to bytes, ensuring:
+        - Only valid hex characters
+        - Even number of hex digits (1 byte = 2 hex chars)
+        - Word-aligned (pad with 0x00 if needed)
+
+        Returns:
+            A word-aligned bytes object ready to be sent.
+        """
+        epc_hex = epc_hex.strip().replace(" ", "")
+        
+        if not all(c in "0123456789abcdefABCDEF" for c in epc_hex):
+            raise ValueError("EPC hex contains non-hex characters.")
+        
+        if len(epc_hex) % 2 != 0:
+            raise ValueError("EPC hex must contain an even number of characters.")
+
+        data = bytes.fromhex(epc_hex)
+        
+        if len(data) % 2 != 0:
+            data += b"\x00"  # Pad to next word (16-bit)
+
+        return data
+    
+    @staticmethod
+    def calculate_start_word(epc_hex: str, *, overwrite_pc: bool = False, prefix_words: int = 0) -> int:
+        """
+        Calculates the start word for writing EPC data.
+        
+        Parameters:
+            epc_hex        : str   - The EPC you want to write.
+            overwrite_pc   : bool  - If True, includes PC word (start at word 1).
+                                    Otherwise, starts at word 2 (normal safe zone).
+            prefix_words   : int   - Extra prefix words to skip (e.g. locked data).
+
+        Returns:
+            int - the word address to use in the write command.
+        """
+        # Validate and ensure word-aligned input
+        _ = NationReader.validate_epc_hex(epc_hex)
+        
+        base_word = 1 if overwrite_pc else 2
+        return base_word + prefix_words
 
     ################################################################################
     #                            ANT HEADER                                        #
     ################################################################################
-    
-    def _send_ext_ant_config(self, main_ant: int) -> bool:
-        """
-        Send MID 0x07 to configure extended hub ports of one main antenna.
-        Payload = PID (1 byte) + U16 (big-endian)
-        """
-        pid = main_ant
-        ant_mask = self._ext_ant_masks[main_ant]
-        payload = bytes([pid]) + ant_mask.to_bytes(2, byteorder="big")
-        frame = self.build_frame(mid=0x07, payload=payload, rs485=self.rs485)
-        
-        try:
-            self.send(frame)
-            resp = self.receive(64)
-            parsed = self.parse_frame(resp)
-            result = parsed["data"][0]
-            if result == 0x00:
-                print(f"✅ Config Main Ant {main_ant} OK: Mask=0x{ant_mask:04X}")
-                return True
-            else:
-                print(f"❌ Config Failed for Main {main_ant}: Code=0x{result:02X}")
-                return False
-        except Exception as e:
-            print(f"❌ Exception in config Main {main_ant}: {e}")
-            return False
-    def _parse_global_port(self, global_port: int) -> tuple[int, int]:
-        if not (1 <= global_port <= 512):
-            raise ValueError("Port must be 1–512")
-        main_ant = ((global_port - 1) // 16) + 1
-        port = ((global_port - 1) % 16) + 1
-        return main_ant, port
-    def enable_ant(self, global_port: int) -> bool:
-        main_ant, port = self._parse_global_port(global_port)
-        self._ext_ant_masks[main_ant] |= (1 << (port - 1))
-        return self._send_ext_ant_config(main_ant)
-    def disable_ant(self, global_port: int) -> bool:
-        main_ant, port = self._parse_global_port(global_port)
-        self._ext_ant_masks[main_ant] &= ~(1 << (port - 1))
-        return self._send_ext_ant_config(main_ant)
-    def switch_ant(self, global_port: int) -> bool:
-        main_ant, port = self._parse_global_port(global_port)
-        self._last_switch_ant_mask = (main_ant, 1 << (port - 1))
-        print(f"📡 Switched to Main {main_ant} Port {port} (mask=0x{1 << (port - 1):04X})")
-        return True
-    def send_all_ant_config(self) -> None:
-        for main_ant, mask in self._ext_ant_masks.items():
-            if mask:
-                self._send_ext_ant_config(main_ant)
+
+
     def query_ext_ant_config(self) -> dict[int, int]:
         """
-        Send MID 0x08 (empty payload), receive PID+U16 for each Main Ant.
-        Returns: dict {main_ant: mask}
+        Query the extended antenna hub configuration.
+        MID = 0x08, CAT = 0x01
+        Returns a dict: {main_antenna_id: mask}
         """
         try:
-            frame = self.build_frame(mid=0x08, payload=b'', rs485=self.rs485)
-            self.send(frame)
-            resp = self.receive(256)
-            parsed = self.parse_frame(resp)
+            self.uart.flush_input()
+            frame = self.build_frame(mid=0x0208, payload=b'', rs485=False)
+            print(f"📤 Sent frame: {frame.hex().upper()}")
+            self.uart.send(frame)
+            time.sleep(0.1)
+            raw = self.uart.receive(64)
+            if not raw:
+                print("❌ No response for extended antenna config query.")
+                return {}
 
-            masks = {}
-            data = parsed['data']
-            i = 0
-            while i < len(data):
-                pid = data[i]
-                if not (1 <= pid <= 0x20):
-                    break
-                mask = int.from_bytes(data[i+1:i+3], byteorder="big")
-                masks[pid] = mask
-                self._ext_ant_masks[pid] = mask  # Update internal state
-                i += 3
-            print(f"📥 Queried extended antenna config: {masks}")
-            return masks
+            frames = self.extract_valid_frames(raw)
+            if not frames:
+                print("❌ No valid frames extracted.")
+                return {}
 
-        except Exception as e:
-            print(f"❌ Query failed: {e}")
+            for f in frames:
+                parsed = self.parse_frame(f)
+                if parsed["mid"] != 0x08:
+                    print(f"❌ Unexpected MID in response: 0x{parsed['mid']:02X}")
+                    continue
+
+                data = parsed["data"]
+                masks = {}
+                i = 0
+                while i + 3 <= len(data):
+                    pid = data[i]
+                    if not (1 <= pid <= 0x20):
+                        break
+                    mask = int.from_bytes(data[i+1:i+3], byteorder="big")
+                    masks[pid] = mask
+                    self._ext_ant_masks[pid] = mask
+                    i += 3
+                print(f"📥 Queried extended antenna config: {masks}")
+                return masks
+
+            print("❌ No MID=0x08 frame found.")
             return {}
-    def get_enabled_ants(self) -> list[int]:
-        result = []
-        for main_ant, mask in self._ext_ant_masks.items():
-            for i in range(16):
-                if (mask >> i) & 1:
-                    result.append((main_ant - 1) * 16 + (i + 1))
-        return result
-
-
+        except Exception as e:
+            print(f"❌ Exception in query_ext_ant_config: {e}")
+            return {}
+        
+        
     ################################################################################
     #                            PROFILE HEADER                                    #
     ################################################################################
@@ -974,6 +1422,7 @@ class NationReader:
         except Exception as e:
             print(f"❌ Exception during profile selection: {e}")
             return False
+  
         
     def get_profile(self) -> dict:
         profile = {}
@@ -1023,6 +1472,7 @@ class NationReader:
             print(f"❌ Failed to get profile: {e}")
             return {"error": str(e)}
 
+
     def query_rf_band(self) -> str:
         """
         Queries the current RF frequency band (e.g., FCC, ETSI, JP).
@@ -1062,6 +1512,8 @@ class NationReader:
         except Exception as e:
             print(f"❌ Error in query_rf_band: {e}")
             return "Error"
+
+
 
     def set_rf_band(self, band_code: int, persistence: bool = True) -> bool:
         """
@@ -1116,6 +1568,7 @@ class NationReader:
             print(f"❌ Exception in set_rf_band: {e}")
         return False
 
+
     def query_working_frequency(self) -> dict:
         """
         Queries the reader's working frequency configuration.
@@ -1155,6 +1608,7 @@ class NationReader:
         except Exception as e:
             print(f"❌ Error in query_working_frequency: {e}")
             return {"mode": "error", "channels": []}
+
 
     def query_filter_settings(self) -> dict:
         """
@@ -1341,6 +1795,7 @@ class NationReader:
             print(f"❌ Exception in get_session: {e}")
             return None
 
+   
     
     def is_idle(self, retry: int = 3, delay: float = 0.3, settle_delay: float = 0.5) -> bool:
         """
@@ -1375,6 +1830,7 @@ class NationReader:
 
         print("❌ Reader did not enter Idle state after retries.")
         return False
+
 
     def configure_baseband(self, speed: int, q_value: int, session: int, inventory_flag: int) -> bool:
         """
@@ -1520,104 +1976,3 @@ class NationReader:
             return {}
 
 
-    def write_epc_tag(
-        self,
-        antenna_mask: int,
-        start_word_addr: int,
-        epc_data: bytes,
-        access_password: int = 0,
-        match_area: int = None,
-        match_addr: int = None,
-        match_bitlen: int = None,
-        match_data: bytes = None
-    ) -> dict:
-        """
-        Write EPC data to a tag.
-        :param antenna_mask: 4-byte mask for antennas (bitmask, e.g., 0x00000001 for Ant 1)
-        :param start_word_addr: Word address to start writing (usually 2 for EPC area)
-        :param epc_data: EPC data as bytes (must be even length)
-        :param access_password: Optional 4-byte password (default 0)
-        :param match_area: Optional area for matching (1=EPC, 2=TID, 3=USER)
-        :param match_addr: Optional match start address
-        :param match_bitlen: Optional match bit length
-        :param match_data: Optional match data bytes
-        :return: dict with result and error info
-        """
-        try:
-            self.stop_inventory()
-            if not self.is_idle():
-                return {"success": False, "error": "Reader not idle"}
-
-            # --- Build payload ---
-            payload = b""
-            payload += antenna_mask.to_bytes(4, "big")  # Antenna mask
-            payload += b"\x01"  # Data area: 1 = EPC
-            payload += start_word_addr.to_bytes(2, "big")  # Start word address
-            payload += epc_data  # Data content (must be even length)
-
-            # Optional: Access password
-            if access_password:
-                payload += b"\x02"  # PID for password
-                payload += (4).to_bytes(1, "big")
-                payload += access_password.to_bytes(4, "big")
-
-            # Optional: Match parameter
-            if (
-                match_area is not None
-                and match_addr is not None
-                and match_bitlen is not None
-                and match_data is not None
-            ):
-                match_payload = (
-                    bytes([match_area])
-                    + match_addr.to_bytes(2, "big")
-                    + bytes([match_bitlen])
-                    + match_data
-                )
-                payload += b"\x01"  # PID for match
-                payload += len(match_payload).to_bytes(1, "big")
-                payload += match_payload
-
-            # --- Send frame ---
-            frame = self.build_frame(mid=0x11, payload=payload, rs485=self.rs485)
-            self.uart.flush_input()
-            self.uart.send(frame)
-            time.sleep(0.1)
-            raw = self.uart.receive(64)
-            if not raw:
-                return {"success": False, "error": "No response from reader"}
-
-            resp = self.parse_frame(raw)
-            if resp["mid"] != 0x11:
-                return {"success": False, "error": f"Unexpected MID: {resp['mid']}"}
-
-            result_code = resp["data"][0]
-            result_map = {
-                0: "Write successful",
-                1: "Antenna port parameter error",
-                2: "Choosing parameter error",
-                3: "Writing parameter error",
-                4: "CRC check error",
-                5: "Insufficient power",
-                6: "Data area overflow",
-                7: "Data area locked",
-                8: "Access password error",
-                9: "Other tag errors",
-                10: "Tag lost",
-                11: "Reader sending command error",
-            }
-            result_msg = result_map.get(result_code, f"Unknown error ({result_code})")
-
-            # Optional: Failed word address
-            failed_addr = None
-            if len(resp["data"]) >= 4 and resp["data"][1] == 0x01:
-                failed_addr = int.from_bytes(resp["data"][2:4], "big")
-
-            return {
-                "success": result_code == 0,
-                "result_code": result_code,
-                "result_msg": result_msg,
-                "failed_addr": failed_addr,
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}

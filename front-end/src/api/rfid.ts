@@ -98,3 +98,22 @@ export async function configureBaseband(params: {
 export async function queryBasebandProfile() {
   return apiCall("/api/query_baseband_profile", "GET")
 }
+
+// Write EPC Tag (match App.tsx usage and backend endpoint)
+export async function WriteEPCtag(
+  antennaMask: number,
+  dataArea: number,
+  startWord: number,
+  epcHex: string,
+  match_epc?: string,
+  access_pwd?: string | number,
+  timeout: number = 2
+) {
+  return apiCall("/api/write_epc_tag", "POST", {
+    epc: epcHex,
+    match_epc,
+    access_pwd,
+    antenna_id: 1, // always 1 for now, or map from antennaMask if needed
+    timeout,
+  })
+}
