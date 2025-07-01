@@ -152,12 +152,41 @@ export function Sidebar({
     setLoading(false)
   }
 
+  // Add browser-side auto-detect RS232 port (Web Serial API)
   const handleDetectPort = async () => {
+    // Try browser Web Serial API first
+    if ("serial" in navigator) {
+      try {
+        // Prompt user to select a serial port
+        // Filters can be added for USB vendor/product if needed
+        // @ts-ignore
+        const port = await (navigator as any).serial.requestPort?.()
+        if (port) {
+          // Try to get info (USB vendor/product) if available
+          // @ts-ignore
+          const info = port.getInfo?.()
+          // Compose a display string (not always available)
+          let portLabel = ""
+          if (info) {
+            if (info.usbVendorId && info.usbProductId) {
+              portLabel = `USB VID: ${info.usbVendorId.toString(16)}, PID: ${info.usbProductId.toString(16)}`
+            }
+          }
+          // Web Serial API does not provide a system path, so just show "Browser Serial"
+          setSerialPort("browser-serial")
+          toast("Đã chọn cổng RS232 qua trình duyệt.", { description: portLabel || "Web Serial API" })
+          return
+        }
+      } catch (err) {
+        toast("Không thể phát hiện cổng RS232 qua trình duyệt.", { description: String(err), style: { background: "#ef4444", color: "#fff" } })
+        // Fallback to backend detection below
+      }
+    }
+    // Fallback: backend auto-detect
     setDetectingPort(true)
     try {
       const res = await detectPorts()
       // res is already the parsed JSON object
-      console.log(res)
       if (res.success && res.port) {
         setSerialPort(res.port)
         toast("Đã phát hiện cổng: " + res.port, { description: "Auto Detect UART" })

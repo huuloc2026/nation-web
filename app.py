@@ -14,10 +14,8 @@ import random
 
 # Import các hàm từ zk.py
 from zk import (
-    RFIDTag, InventoryResult, connect_reader, get_reader_info, 
-    start_inventory, set_power, set_buzzer,
-    get_profile, set_profile, enable_antenna, disable_antenna,
-    get_power, 
+   
+    get_profile, set_profile,
 )
 
 # Import configuration
@@ -280,12 +278,13 @@ class RFIDWebController:
             return {"success": False, "message": f"Lỗi: {str(e)}"}
   
     def set_buzzer(self, enable: bool) -> Dict:
-        """Bật/tắt buzzer"""
-        if not self.is_connected:
+        """Bật/tắt buzzer dựa trên NationReader.set_beeper"""
+        if not self.is_connected or not self.reader:
             return {"success": False, "message": "Chưa kết nối đến reader"}
-        
         try:
-            result = set_buzzer(self.reader, enable)
+            # Mode: 1 = continuous beep, 0 = off, 2 = beep on new tag (optional)
+            mode = 1 if enable else 0
+            result = self.reader.set_beeper(mode)
             if result:
                 status = "bật" if enable else "tắt"
                 logger.info(f"{'Enabled' if enable else 'Disabled'} buzzer")
@@ -447,7 +446,6 @@ class RFIDWebController:
                 timeout=timeout,
                 scan_timeout=scan_timeout,
             )
-            # If NationReader.write_to_target_tag returns None, treat as failure
             if result is None:
                 return {"success": False, "message": "Không thể ghi EPC vào tag"}
             return result
@@ -456,12 +454,7 @@ class RFIDWebController:
             return {"success": False, "message": f"Lỗi: {str(e)}"}
     
 
-    def write_to_target_tag(self):
-        """Ghi dữ liệu vào tag đã phát hiện"""
-        if not self.is_connected:
-            return {"success": False, "message": "Chưa kết nối đến reader"}
 
-    
     
             
         
@@ -625,22 +618,22 @@ def api_get_config():
         return {"success": False, "message": f"Lỗi: {str(e)}"}
 
 
-@app.route('/api/debug', methods=['GET'])
-def api_debug():
-    """API debug info"""
-    try:
-        data = {
-            "is_connected": rfid_controller.is_connected,
-            "inventory_thread_alive": inventory_thread.is_alive() if inventory_thread else False,
-            "stop_inventory_flag": stop_inventory_flag,
-            "detected_tags_count": len(detected_tags),
-            "inventory_stats": inventory_stats,
-            "recent_tags": detected_tags[-10:] if detected_tags else []  # 10 tags gần nhất
-        }
-        return {"success": True, "data": data}
-    except Exception as e:
-        logger.error(f"Debug API error: {e}")
-        return {"success": False, "message": f"Lỗi: {str(e)}"}
+# @app.route('/api/debug', methods=['GET'])
+# def api_debug():
+#     """API debug info"""
+#     try:
+#         data = {
+#             "is_connected": rfid_controller.is_connected,
+#             "inventory_thread_alive": inventory_thread.is_alive() if inventory_thread else False,
+#             "stop_inventory_flag": stop_inventory_flag,
+#             "detected_tags_count": len(detected_tags),
+#             "inventory_stats": inventory_stats,
+#             "recent_tags": detected_tags[-10:] if detected_tags else []  # 10 tags gần nhất
+#         }
+#         return {"success": True, "data": data}
+#     except Exception as e:
+#         logger.error(f"Debug API error: {e}")
+#         return {"success": False, "message": f"Lỗi: {str(e)}"}
 
 
 @app.route('/api/configure_baseband', methods=['POST'])
@@ -767,16 +760,15 @@ def api_write_epc_tag():
     """API ghi EPC vào tag"""
     data = request.get_json()
     epc = data.get('epc')
-    match_epc = data.get('match_epc')  # Optional: EPC to match before writing
-    access_pwd = data.get('access_pwd')  # Optional: password
+    match_epc = data.get('match_epc') 
+    access_pwd = data.get('access_pwd')  
     antenna_id = data.get('antenna_id', 1)
     timeout = data.get('timeout', 2.0)
-
     if not epc:
         return jsonify({"success": False, "message": "EPC không được để trống"})
 
     try:
-        # Use the controller's write_to_target_tag method
+        
         result = rfid_controller.write_to_target_tag(
             target_tag_epc=match_epc or epc,
             new_epc_hex=epc,
