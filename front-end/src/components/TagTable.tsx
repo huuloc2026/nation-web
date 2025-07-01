@@ -30,7 +30,7 @@ export function TagTable({ tags, mobile }: TagTableProps) {
             </TableRow>
           ) : (
             tags.map((tag) => (
-              <TableRow key={tag.id}>
+              <TableRow key={tag.epc}>
                 <TableCell className={cn("font-mono text-xs", !mobile && "sm:text-sm")}>
                   <div className={cn("truncate", mobile ? "max-w-[120px]" : "max-w-[150px] sm:max-w-none")}>{tag.epc}</div>
                 </TableCell>

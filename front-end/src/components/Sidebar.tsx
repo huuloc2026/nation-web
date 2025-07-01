@@ -1,16 +1,25 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Wifi, WifiOff, Radio, Activity, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
+import {
+  SPEED_OPTIONS,
+  Q_VALUE_OPTIONS,
+  SESSION_OPTIONS,
+  INVENTORY_FLAG_OPTIONS,
+} from "@/lib/baseband.constant"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { getAntennaPower, setAntennaPower } from "@/api/rfid"
-import { enableAntennas, disableAntennas } from "@/api/rfid"
+import { detectPorts, getAntennaPower, setAntennaPower, enableAntennas, disableAntennas, getReaderInfo, configureBaseband, queryBasebandProfile } from "@/api/rfid"
+
 interface AntennaSettings {
+  antenna1: boolean
+  antenna2: boolean
+  antenna3: boolean
+  antenna4: boolean
   [key: string]: boolean
 }
 
@@ -23,11 +32,12 @@ interface SidebarProps {
   setBaudRate: (value: string) => void
   handleConnect: () => void
   antennaSettings: AntennaSettings
+  setAntennaSettings: React.Dispatch<React.SetStateAction<AntennaSettings>>
   handleAntennaChange: (antenna: keyof AntennaSettings, checked: boolean) => void
+
   handleGetPower?: () => Promise<void>
   handleSetPower?: () => Promise<void>
 }
-
 export function Sidebar({
   className,
   isConnected,
@@ -37,6 +47,7 @@ export function Sidebar({
   setBaudRate,
   handleConnect,
   antennaSettings,
+  setAntennaSettings,
   handleAntennaChange,
 }: SidebarProps) {
   const [powers, setPowers] = useState<{ [key: number]: number }>({
@@ -46,9 +57,22 @@ export function Sidebar({
     4: 0,
   })
 
-
   const [preserveConfig, setPreserveConfig] = useState(true)
   const [loading, setLoading] = useState(false)
+  const [detectingPort, setDetectingPort] = useState(false)
+  const [readerInfo, setReaderInfo] = useState<any>(null)
+  const [infoLoading, setInfoLoading] = useState(false)
+
+  // Baseband state
+  const [baseband, setBaseband] = useState({
+    speed: 0,
+    q_value: 1,
+    session: 2,
+    inventory_flag: 0,
+  })
+
+  const [basebandProfile, setBasebandProfile] = useState<any>(null)
+  const [basebandLoading, setBasebandLoading] = useState(false)
 
   const handleGetPower = async () => {
     setLoading(true)
@@ -85,14 +109,13 @@ export function Sidebar({
     }
     setLoading(false)
   }
+
   const handleGetAntenna = async () => {
     setLoading(true)
     try {
-      // You may need to implement /api/get_enabled_antennas on backend
       const res = await fetch("/api/get_enabled_antennas")
       const data = await res.json()
       if (data.success && Array.isArray(data.antennas)) {
-        // Update antennaSettings state
         setAntennaSettings((prev) => {
           const updated = { ...prev }
           Object.keys(updated).forEach((key) => {
@@ -111,7 +134,6 @@ export function Sidebar({
     setLoading(false)
   }
 
-  // Set Antenna: enable/disable antennas based on UI state
   const handleSetAntenna = async () => {
     setLoading(true)
     try {
@@ -121,9 +143,7 @@ export function Sidebar({
       const disabledAnts = Object.entries(antennaSettings)
         .filter(([_, v]) => !v)
         .map(([k]) => Number(k.replace("antenna", "")))
-      // Enable selected antennas
       if (enabledAnts.length > 0) await enableAntennas(enabledAnts)
-      // Disable unselected antennas
       if (disabledAnts.length > 0) await disableAntennas(disabledAnts)
       toast("Đã thiết lập trạng thái antenna.", { description: "Set Antenna" })
     } catch (e) {
@@ -131,6 +151,77 @@ export function Sidebar({
     }
     setLoading(false)
   }
+
+  const handleDetectPort = async () => {
+    setDetectingPort(true)
+    try {
+      const res = await detectPorts()
+      // res is already the parsed JSON object
+      console.log(res)
+      if (res.success && res.port) {
+        setSerialPort(res.port)
+        toast("Đã phát hiện cổng: " + res.port, { description: "Auto Detect UART" })
+      } else {
+        toast("Không tìm thấy cổng UART.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+      }
+    } catch (e) {
+      toast("Không thể phát hiện cổng UART.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+    }
+    setDetectingPort(false)
+  }
+
+  const handleConfigureBaseband = async () => {
+    setBasebandLoading(true)
+    try {
+      const res = await configureBaseband(baseband)
+      if (res.success) {
+        toast("Đã cấu hình baseband thành công.", { description: "Baseband" })
+      } else {
+        toast(res.message || "Không thể cấu hình baseband.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+      }
+    } catch (e) {
+      toast("Không thể cấu hình baseband.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+    }
+    setBasebandLoading(false)
+  }
+
+  const handleQueryBasebandProfile = async () => {
+    setBasebandLoading(true)
+    try {
+      const res = await queryBasebandProfile()
+      if (res.success && res.data) {
+        setBasebandProfile(res.data)
+        // Fill select fields with queried values (ensure string for Select)
+        setBaseband({
+          speed: typeof res.data.speed === "number" ? res.data.speed : 0,
+          q_value: typeof res.data.q_value === "number" ? res.data.q_value : 1,
+          session: typeof res.data.session === "number" ? res.data.session : 2,
+          inventory_flag: typeof res.data.inventory_flag === "number" ? res.data.inventory_flag : 0,
+        })
+        toast("Đã lấy thông tin baseband.", { description: "Baseband" })
+      } else {
+        setBasebandProfile(null)
+        toast(res.message || "Không thể lấy thông tin baseband.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+      }
+    } catch (e) {
+      setBasebandProfile(null)
+      toast("Không thể lấy thông tin baseband.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+    }
+    setBasebandLoading(false)
+  }
+
+  useEffect(() => {
+    if (isConnected) {
+      setInfoLoading(true)
+      getReaderInfo().then((res) => {
+        if (res.success && res.data) setReaderInfo(res.data)
+        else setReaderInfo(null)
+        setInfoLoading(false)
+      })
+    } else {
+      setReaderInfo(null)
+    }
+  }, [isConnected])
 
   return (
     <div className={cn("flex h-full w-80 flex-col bg-background border-r", className)}>
@@ -152,19 +243,17 @@ export function Sidebar({
               <Label htmlFor="serialPort" className="text-sm">
                 Serial Port
               </Label>
-              <Select value={serialPort} onValueChange={setSerialPort}>
-                <SelectTrigger className="h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="COM1">COM1</SelectItem>
-                  <SelectItem value="COM2">COM2</SelectItem>
-                  <SelectItem value="COM3">COM3</SelectItem>
-                  <SelectItem value="COM4">COM4</SelectItem>
-                  <SelectItem value="/dev/ttyUSB0">/dev/ttyUSB0</SelectItem>
-                  <SelectItem value="/dev/ttyUSB1">/dev/ttyUSB1</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex gap-2">
+                <input
+                  id="serialPort"
+                  type="text"
+                  value={serialPort}
+                  onChange={(e) => setSerialPort(e.target.value)}
+                  className="border rounded px-2 py-1 text-sm flex-1"
+                  placeholder="e.g. /dev/ttyUSB0 or COM3"
+                  disabled={loading}
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="baudRate" className="text-sm">
@@ -193,9 +282,110 @@ export function Sidebar({
               >
                 {isConnected ? "Disconnect" : "Connect"}
               </Button>
+              <Button
+                size="sm"
+                variant={isConnected ? "default" : "destructive"}
+                onClick={handleDetectPort}
+                disabled={loading || detectingPort}
+                type="button"
+              >
+                {detectingPort ? "Detecting..." : "Detect"}
+              </Button>
             </div>
           </CardContent>
         </Card>
+
+
+ {/* Baseband Configuration Card */}
+ <Card>
+  <CardHeader className="pb-3">
+    <CardTitle className="flex items-center gap-2 text-base">
+      <Zap className="h-4 w-4" />
+      Baseband Settings
+    </CardTitle>
+  </CardHeader>
+  <CardContent className="space-y-3">
+    <div className="grid grid-cols-2 gap-2">
+      <div>
+        <Label htmlFor="baseband-speed" className="text-xs">Speed</Label>
+        <Select
+          value={String(baseband.speed)}
+          onValueChange={v => setBaseband(b => ({ ...b, speed: Number(v) }))}
+          disabled={basebandLoading}
+        >
+          <SelectTrigger className="w-full h-9">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SPEED_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={String(opt.value)}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
+        <Label htmlFor="baseband-q" className="text-xs">Q Value</Label>
+        <Select
+          value={String(baseband.q_value)}
+          onValueChange={v => setBaseband(b => ({ ...b, q_value: Number(v) }))}
+          disabled={basebandLoading}
+        >
+          <SelectTrigger className="w-full h-9">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Q_VALUE_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={String(opt.value)}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
+        <Label htmlFor="baseband-session" className="text-xs">Session</Label>
+        <Select
+          value={String(baseband.session)}
+          onValueChange={v => setBaseband(b => ({ ...b, session: Number(v) }))}
+          disabled={basebandLoading}
+        >
+          <SelectTrigger className="w-full h-9">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SESSION_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={String(opt.value)}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div>
+        <Label htmlFor="baseband-flag" className="text-xs">Inventory Flag</Label>
+        <Select
+          value={String(baseband.inventory_flag)}
+          onValueChange={v => setBaseband(b => ({ ...b, inventory_flag: Number(v) }))}
+          disabled={basebandLoading}
+        >
+          <SelectTrigger className="w-full h-9">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {INVENTORY_FLAG_OPTIONS.map(opt => (
+              <SelectItem key={opt.value} value={String(opt.value)}>{opt.label}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+    <div className="flex gap-2">
+      <Button size="sm" onClick={handleConfigureBaseband} className="flex-1" disabled={basebandLoading}>
+        {basebandLoading ? "Đang gửi..." : "Set Baseband"}
+      </Button>
+      <Button size="sm" variant="outline" onClick={handleQueryBasebandProfile} className="flex-1" disabled={basebandLoading}>
+        {basebandLoading ? "Đang lấy..." : "Get Baseband"}
+      </Button>
+    </div>
+
+  </CardContent>
+</Card>
 
         <Card>
           <CardHeader className="pb-3">
@@ -205,29 +395,19 @@ export function Sidebar({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Status:</span>
-              <Badge variant={isConnected ? "default" : "destructive"} className="text-xs">
-                {isConnected ? "Connected" : "Disconnected"}
-              </Badge>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Model:</span>
-              <span className="text-sm font-medium">RFID-R2000</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Firmware:</span>
-              <span className="text-sm font-medium">v2.1.3</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Serial:</span>
-              <span className="text-sm font-medium">RF2000-001</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Temperature:</span>
-              <span className="text-sm font-medium">42°C</span>
-            </div>
-          </CardContent>
+          {infoLoading ? (
+            <div className="text-sm text-muted-foreground">Loading...</div>
+          ) : readerInfo ? (
+            Object.entries(readerInfo).map(([k, v]) => (
+              <div key={k} className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">{k}:</span>
+                <span className="text-sm font-medium">{String(v)}</span>
+              </div>
+            ))
+          ) : (
+            <div className="text-sm text-muted-foreground">No reader info</div>
+          )}
+        </CardContent>
         </Card>
 
         <Card>
@@ -251,18 +431,16 @@ export function Sidebar({
                   <Label htmlFor={key} className="text-sm font-medium">
                     Antenna {key.slice(-1)}
                   </Label>
-                  
                 </div>
-                
               ))}
             </div>
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={handleGetAntenna} className="flex-1" disabled={loading}>
                 {loading ? "Đang lấy..." : "Get Antenna"}
               </Button>
-             <Button size="sm" onClick={handleSetAntenna} className="flex-1" disabled={loading}>
-  {loading ? "Đang gửi..." : "Set Antenna"}
-</Button>
+              <Button size="sm" onClick={handleSetAntenna} className="flex-1" disabled={loading}>
+                {loading ? "Đang gửi..." : "Set Antenna"}
+              </Button>
             </div>
             <div className="grid grid-cols-2 gap-3">
               {[1, 2, 3, 4].map((ant) => (
@@ -308,10 +486,8 @@ export function Sidebar({
             </div>
           </CardContent>
         </Card>
-      </div>
 
-      <div className="border-t p-4">
-        <p className="text-xs text-muted-foreground">IoT Device Manager v1.0</p>
+       
       </div>
     </div>
   )

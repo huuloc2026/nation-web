@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button"
-import { Settings, Play, Square, Trash2 } from "lucide-react"
+import { PenLine, Play, Square, Trash2,FolderUp } from "lucide-react"
 
 interface InventoryControlProps {
   isInventoryRunning: boolean
@@ -18,10 +18,7 @@ export function InventoryControl({
 }: InventoryControlProps) {
   return (
     <div className="grid grid-cols-2 gap-3">
-      <Button variant="outline" size="sm" className="w-full">
-        <Settings className="h-4 w-4 mr-2" />
-        Setting
-      </Button>
+     
       <Button
         size="sm"
         onClick={onStart}
@@ -44,6 +41,14 @@ export function InventoryControl({
       <Button variant="outline" size="sm" onClick={onClear} className="w-full">
         <Trash2 className="h-4 w-4 mr-2" />
         Clear
+      </Button>
+      <Button variant="outline" size="sm" onClick={()=>{alert("TODO:EXPORTED")}} className="w-full">
+        <FolderUp  className="h-4 w-4 mr-2" />
+        Export CSV
+      </Button>
+      <Button variant="outline" size="sm" onClick={()=>{alert("TODO:EXPORTED")}} className="w-full">
+        <PenLine  className="h-4 w-4 mr-2" />
+       Write EPC
       </Button>
     </div>
   )

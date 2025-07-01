@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Sidebar } from "./components/Sidebar"
 import { TagTable } from "./components/TagTable"
-import { connectReader, disconnectReader, startInventory, stopInventory, getTags } from "./api/rfid"
+import { connectReader, disconnectReader, startInventory, stopInventory } from "./api/rfid"
 import { toast } from "sonner"
+import { io, Socket } from "socket.io-client"
 
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { InventoryControl } from "./components/InventoryControl"
@@ -30,7 +31,7 @@ export interface AntennaSettings {
 
 export default function Dashboard() {
   const [isConnected, setIsConnected] = useState(false)
-  const [serialPort, setSerialPort] = useState("/dev/ttyUSB0")
+  const [serialPort, setSerialPort] = useState("/dev/ttyUSB1")
   const [baudRate, setBaudRate] = useState("115200")
   const [detectedTags, setDetectedTags] = useState(0)
   const [totalTags, setTotalTags] = useState(0)
@@ -39,43 +40,77 @@ export default function Dashboard() {
   const [tags, setTags] = useState<Tag[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Antenna settings
   const [antennaSettings, setAntennaSettings] = useState<AntennaSettings>({
     antenna1: true,
-    antenna2: true,
+    antenna2: false,
     antenna3: false,
     antenna4: false,
   })
 
-  // Helper: aggregate tags by EPC (count, lastSeen, rssi, antenna)
-  function aggregateTags(rawTags: any[]): Tag[] {
-    const tagMap = new Map<string, Tag>()
-    rawTags.forEach((tag) => {
-      const epc = tag.epc
+  // --- WebSocket state ---
+  const socketRef = useRef<Socket | null>(null)
+  const tagMapRef = useRef<Map<string, Tag>>(new Map())
+
+  // --- WebSocket setup ---
+  useEffect(() => {
+    // Connect to backend Socket.IO server
+    const socket = io(import.meta.env.VITE_WS_URL ?? "http://localhost:3000", {
+      transports: ["websocket"],   // force pure WS (optional)
+      path: "/socket.io",          // match server if you changed it
+      withCredentials: false,      // change to true if you **need** cookies
+    })
+    
+    socketRef.current = socket
+    socket.on("connect", () => console.log("🔌 Socket connected:", socket.id))
+socket.on("disconnect", (r) => console.warn("⚠️  disconnected:", r))
+socket.on("connect_error", (err) => console.error("❌ connect_error", err.message))
+
+
+    // Handle tag_detected event
+    socket.on("tag_detected", (tagData: any) => {
+      // Update tagMapRef (aggregate by EPC)
+
+      console.log(`Tag detected: ${tagData.epc}, RSSI: ${tagData.rssi}, Antenna: ${tagData.antenna}`)
+      const tagMap = tagMapRef.current
+      const epc = tagData.epc
       if (tagMap.has(epc)) {
         const existing = tagMap.get(epc)!
         existing.count += 1
-        existing.lastSeen = tag.timestamp // update to latest
-        // Optionally update rssi/antenna if needed
-        if (tag.rssi > existing.rssi) existing.rssi = tag.rssi
-        if (!`${existing.antenna}`.includes(`${tag.antenna}`)) {
-          existing.antenna = `${existing.antenna}, ${tag.antenna}`
+        existing.lastSeen = tagData.timestamp
+        if (tagData.rssi > existing.rssi) existing.rssi = tagData.rssi
+        if (!`${existing.antenna}`.includes(`${tagData.antenna}`)) {
+          existing.antenna = `${existing.antenna}, ${tagData.antenna}`
         }
       } else {
         tagMap.set(epc, {
           id: tagMap.size + 1,
           epc,
           count: 1,
-          antenna: tag.antenna,
-          rssi: tag.rssi,
-          lastSeen: tag.timestamp,
+          antenna: tagData.antenna,
+          rssi: tagData.rssi,
+          lastSeen: tagData.timestamp,
         })
       }
+      // Update state
+      const arr = Array.from(tagMap.values())
+      setTags(arr)
+      setDetectedTags(arr.length)
+      setTotalTags(arr.reduce((sum, t) => sum + t.count, 0))
     })
-    return Array.from(tagMap.values())
-  }
+
+    // Optionally handle inventory_end event
+    socket.on("inventory_end", () => {
+      // You may want to stop inventory or show a message
+      setIsInventoryRunning(false)
+    })
+
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [])
 
   // Timer effect
   useEffect(() => {
@@ -96,51 +131,13 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [isInventoryRunning, elapsedMs])
 
-  // Poll tags from backend when inventory is running
-  useEffect(() => {
-    if (!isInventoryRunning) {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-        pollIntervalRef.current = null
-      }
-      return
-    }
-
-    pollIntervalRef.current = setInterval(async () => {
-      const res = await getTags()
-      if (res && res.success && Array.isArray(res.data)) {
-        const aggTags = aggregateTags(res.data)
-        setTags(aggTags)
-        setDetectedTags(aggTags.length)
-        setTotalTags(aggTags.reduce((sum, t) => sum + t.count, 0))
-      }
-    }, 1000)
-
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-        pollIntervalRef.current = null
-      }
-    }
-  }, [isInventoryRunning])
-
-  const handleConnect = async () => {
-    if (!isConnected) {
-      const result = await connectReader(serialPort, Number(baudRate))
-      if (result.success) setIsConnected(true)
-      // handle result.message for user feedback
-    } else {
-      const result = await disconnectReader()
-      if (result.success) setIsConnected(false)
-      // handle result.message for user feedback
-    }
-  }
-
+  // --- Clear tags on inventory start/stop ---
   const handleStartInventory = async () => {
-    setTags([]) // Clear tags on start
-    setIsInventoryRunning(true)
+    tagMapRef.current.clear()
+    setTags([])
     setDetectedTags(0)
     setTotalTags(0)
+    setIsInventoryRunning(true)
     await startInventory()
     // Optionally handle result for user feedback
   }
@@ -154,13 +151,26 @@ export default function Dashboard() {
     // Optionally handle result for user feedback
   }
 
-  const handleClear = () => {
+  const handleClear = async () => {
+    tagMapRef.current.clear()
     setTags([])
     setDetectedTags(0)
     setTotalTags(0)
     setTimer("00:00:00")
     setElapsedMs(0)
     setIsInventoryRunning(false)
+  }
+
+  const handleConnect = async () => {
+    if (!isConnected) {
+      const result = await connectReader(serialPort, Number(baudRate))
+      if (result.success) setIsConnected(true)
+      // handle result.message for user feedback
+    } else {
+      const result = await disconnectReader()
+      if (result.success) setIsConnected(false)
+      // handle result.message for user feedback
+    }
   }
 
   const handleGetPower = async () => {
@@ -210,6 +220,7 @@ export default function Dashboard() {
           setBaudRate={setBaudRate}
           handleConnect={handleConnect}
           antennaSettings={antennaSettings}
+          setAntennaSettings={setAntennaSettings}
           handleAntennaChange={handleAntennaChange}
         />
       </div>
@@ -225,6 +236,7 @@ export default function Dashboard() {
             setBaudRate={setBaudRate}
             handleConnect={handleConnect}
             antennaSettings={antennaSettings}
+            setAntennaSettings={setAntennaSettings}
             handleAntennaChange={handleAntennaChange}
             handleGetPower={handleGetPower}
             handleSetPower={handleSetPower}
