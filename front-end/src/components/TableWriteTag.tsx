@@ -127,7 +127,7 @@ export function TableWriteTag({ params, result }: TableWriteTagProps) {
             <TableRow>
               <TableCell>{result.success ? "✅" : "❌"}</TableCell>
               <TableCell>{result.result_code}</TableCell>
-              <TableCell>{codeMap[result.result_code] || result.result_msg}</TableCell>
+              <TableCell>{result.result_msg}</TableCell>
               <TableCell>
                 {result.failed_addr !== undefined && result.failed_addr !== null ? result.failed_addr : "-"}
               </TableCell>

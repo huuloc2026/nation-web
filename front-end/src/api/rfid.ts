@@ -31,8 +31,8 @@ export async function disconnectReader() {
 }
 
 // Start inventory
-export async function startInventory(target: number = 0) {
-  return apiCall("/api/start_inventory", "POST", { target })
+export async function startInventory(selectedAntennas:number[]) {
+  return apiCall("/api/start_inventory", "POST", { selectedAntennas })
 }
 
 // Stop inventory

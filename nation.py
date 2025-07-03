@@ -154,7 +154,7 @@ class MID(IntEnum):
 
 
 class NationReader:
-    # DEFAULT_PORT = "/dev/ttyUSB1"
+    # DEFAULT_PORT = "/dev/ttyUSB1"s
     # DEFAULT_BAUDRATE = 115200
     DEFAULT_TIMEOUT = 0.5
 
@@ -172,6 +172,7 @@ class NationReader:
         self.rs485 = False
         # Init in constructor
         self._ext_ant_masks: dict[int, int] = {i: 0 for i in range(1, 33)}  # Main Ant 1–32
+        self.antenna_mask = 0x00000001  # Default to Main Antenna 1 
 
 
     def open(self):
@@ -187,33 +188,8 @@ class NationReader:
     def receive(self, size: int) -> bytes:
         return self.uart.receive(size)
     
-    @staticmethod
-    def auto_detect_port() -> str | None:
-        """
-        Scan all available serial ports and try to detect a NationReader.
-        Returns the port name if found, else None.
-        Cross-platform: works for Windows, Linux, Mac.
-        """
-        try:
-            ports = list(serial.tools.list_ports.comports())
-            
-            if not ports:
-                return None
-            # Prefer USB serial ports, fallback to first available
-            usb_ports = [p.device for p in ports if "USB" in p.device or "usb" in p.device or "ttyACM" in p.device]
-            if usb_ports:
-                return usb_ports[0]
-            # On Windows, COM ports are common
-            com_ports = [p.device for p in ports if p.device.upper().startswith("COM")]
-            if com_ports:
-                return com_ports[0]
-            
-            return ports[0].device
-        except Exception as e:
-            print(f"❌ Error in auto_detect_port: {e}")
-            return None
 
-        
+    
   
     @staticmethod
     def crc16_ccitt(data: bytes) -> int:
@@ -401,6 +377,7 @@ class NationReader:
             print(f"❌ Exception during init: {e}")
             return False
 
+
     def query_rfid_ability(self) -> dict:
         """
         Sends MID=0x00 CAT=0x10 'Query RFID Ability' to get reader capability.
@@ -550,11 +527,48 @@ class NationReader:
 
         return result
 
-    @staticmethod
-    def build_epc_read_payload(antenna_mask: int = 0xFFFFFFFF, continuous: bool = True) -> bytes:
-        payload = antenna_mask.to_bytes(4, 'big')
-        payload += b'\x01' if continuous else b'\x00'
-        return payload
+    #write for me function save antennmask from frontend
+    def save_antenna_mask(self, antenna_mask: int) -> bool:
+        """ Save the antenna mask for the reader.
+        :param antenna_mask: 32-bit integer representing the antenna mask.
+        :return: True if successful, False otherwise.
+        """ 
+        if not (0 <= antenna_mask <= 0xFFFFFFFF):
+            raise ValueError("Antenna mask must be a 32-bit unsigned integer")
+        self.antenna_mask = antenna_mask
+        return self.antenna_mask
+
+
+
+    def build_epc_read_payload(self,antenna_mask: int, continuous: bool = True) -> bytes:
+        """
+        Build payload for MID = 0x10 (Read EPC Tag).
+        Payload Structure:
+        - [4 bytes] Antenna mask (bitmask for antennas 0–31), big-endian
+        - [1 byte]  Continuous flag: 0x01 = continuous read, 0x00 = single read
+        """
+        if not antenna_mask:
+            antenna_mask = 0x00000001
+        if not (0 <= antenna_mask <= 0xFFFFFFFF):
+            raise ValueError("Antenna mask must be a 32-bit unsigned integer")
+        mask_bytes = antenna_mask.to_bytes(4, byteorder='big')
+        mode_byte = b'\x01' if continuous else b'\x00'
+        return mask_bytes + mode_byte
+
+    # @staticmethod WORKING - PHUOC
+    # def build_epc_read_payload(antenna_mask: int = 0x00000001, continuous: bool = True) -> bytes:
+    #     """
+    #     Build payload for MID = 0x10 (Read EPC Tag).
+    #     Payload Structure:
+    #     - [4 bytes] Antenna mask (bitmask for antennas 0–31), big-endian
+    #     - [1 byte]  Continuous flag: 0x01 = continuous read, 0x00 = single read
+    #     """
+    #     if not (0 <= antenna_mask <= 0xFFFFFFFF):
+    #         raise ValueError("Antenna mask must be a 32-bit unsigned integer")
+
+    #     mask_bytes = antenna_mask.to_bytes(4, byteorder='big')
+    #     mode_byte = b'\x01' if continuous else b'\x00'
+    #     return mask_bytes + mode_byte
 
     
     #✅
@@ -569,6 +583,7 @@ class NationReader:
                 pid = data[2 + epc_len + 3]
                 if pid == 0x01:
                     rssi = data[2 + epc_len + 4]
+                    
                           
             return {
                 "epc": epc,
@@ -630,7 +645,6 @@ class NationReader:
             print(f"❌ Exception during power query: {e}")
             return {}
 
-    
     def configure_reader_power(self, antenna_powers: dict[int, int], persistence: Optional[bool] = None) -> bool:
         """
         Configures the transmit power for specified antenna ports.
@@ -722,58 +736,31 @@ class NationReader:
     def is_inventory_running(self):
         return self._inventory_running
 
-    # def start_inventory(self, on_tag=None, on_inventory_end=None):
-    #     """
-    #     Bắt đầu inventory. Gán callback nếu cần:
-    #     - on_tag(tag: dict)
-    #     - on_inventory_end(reason: int)
-    #     """
-    #     self._inventory_running = True
-    #     self._on_tag = on_tag
-    #     self._on_inventory_end = on_inventory_end
+    #still work.
+    def start_inventory_with_mode(self, antenna_mask, callback=None) -> bool:
 
-    #     payload = self.build_epc_read_payload()
-    #     frame = self.build_frame(mid=MID.READ_EPC_TAG, payload=payload,rs485=self.rs485)
-    #     self.send(frame)
-    #     print("🚀 Inventory started")
-
-    #     self._inventory_thread = threading.Thread(target=self._receive_inventory_loop)
-    #     self._inventory_thread.start()
-
-
-    def start_inventory_with_mode(self, mode: int = 0, callback=None) -> bool:
-        """
-        Select baseband profile, then start inventory.
-        modes:
-        0 → Fast profile (ID 0)
-        1 → Dense profile (ID 1)
-        2 → Balanced/Auto profile (ID 2)
-        """
-        if mode not in (0, 1, 2):
-            print(f"❌ Invalid mode: {mode}")
-            return False
 
         try:
-            if not self.select_profile(mode):
-                print(f"❌ Failed to select profile {mode}")
-                return False
+
+            self.stop_inventory()
             
             self._inventory_running = True
             self._on_tag = callback
             self._on_inventory_end = None
-
-            payload = self.build_epc_read_payload()
+            antenna_mask = self.build_antenna_mask(antenna_mask)
+            print("🚀 Starting inventory with antenna mask:", antenna_mask)
+            payload = self.build_epc_read_payload(antenna_mask, continuous=True)    
             frame = self.build_frame(mid=MID.READ_EPC_TAG, payload=payload, rs485=self.rs485)
+            
             self.send(frame)
-            print("🚀 Inventory started")
-
+ 
+         
             self._inventory_thread = threading.Thread(target=self._receive_inventory_loop_optimized)
             self._inventory_thread.start()
             return True
         except Exception as e:
             print(f"❌ Exception in start_inventory_with_mode: {e}")
             return False
-
 
     def _receive_inventory_loop_optimized(self):
         """
@@ -783,6 +770,7 @@ class NationReader:
         while self._inventory_running:
             try:
                 raw = self.receive(128)  # Đọc nhiều bytes hơn/lần
+                
                 if not raw:
                     time.sleep(0.01)
                     continue
@@ -797,8 +785,9 @@ class NationReader:
                 for frame in frames:
                     try:
                         parsed = self.parse_frame(frame)
+                        cat = parsed["category"]
                         mid = parsed["mid"]
-                        if mid == 0x00:  # EPC tag
+                        if cat == 0x10 or mid == 0x00:  # EPC tag
                             tag = self.parse_epc(parsed['data'])
                             if "error" in tag:
                                 # print(f"⚠️ Parse error: {tag['error']}")
@@ -819,6 +808,133 @@ class NationReader:
             except Exception as e:
                 print(f"⚠️ Error in inventory loop: {e}")
                 continue
+
+
+    def query_filter_settings(self):
+        """
+        Query Repeated Tag Filtering Time (ms) and RSSI Threshold (0-255).
+        MID = 0x03
+        Response Data:
+        Byte 0-1: Repeated_Tag_Filter_Time (uint16, big-endian)
+        Byte 2  : RSSI_Threshold (uint8)
+        """
+        MID_QUERY_FILTER=0x020A 
+        try:
+            frame = self.build_frame(mid=MID_QUERY_FILTER, data=b"")
+            self.send(frame)
+
+            response = self.receive_response(mid=MID_QUERY_FILTER)
+            data = response.get('data', b'')
+
+            if len(data) < 3:
+                raise ValueError(f"⚠️ Invalid response data length: {len(data)}")
+
+            repeated_time = int.from_bytes(data[0:2], byteorder='big')
+            rssi_threshold = data[2]
+
+            print(f"📊 Repeated Tag Filter Time: {repeated_time} ms, RSSI Threshold: {rssi_threshold}")
+            return {
+                "repeated_time": repeated_time,
+                "rssi_threshold": rssi_threshold
+            }
+        except Exception as e:
+            print(f"❌ Error querying filter settings: {e}")
+            return None
+
+
+    def set_filter_settings(self, repeated_time_ms: int = 0, rssi_threshold: int = 0):
+        """
+        Set Repeated Tag Filtering Time and RSSI Threshold on the reader.
+
+        MID = 0x0209 (Configure tag uploading parameter)
+        Payload Format:
+            PID 0x01 (U16): repeated time (in 10ms units)
+            PID 0x02 (U8) : RSSI threshold
+        """
+
+        MID_SET_FILTER = 0x0209
+
+        try:
+            # ✅ Validate inputs
+            if not (0 <= repeated_time_ms <= 655350):
+                raise ValueError("Repeated time must be 0–655350 ms (0-65535 * 10ms)")
+            if not (0 <= rssi_threshold <= 255):
+                raise ValueError("RSSI threshold must be 0–255")
+
+            # ✅ Convert ms to 10ms units as required by protocol
+            repeated_time_10ms_units = repeated_time_ms // 10
+
+            # ✅ Build payload with proper PIDs
+            payload = (
+                b'\x01' + repeated_time_10ms_units.to_bytes(2, byteorder='big') +
+                b'\x02' + bytes([rssi_threshold])
+            )
+
+            # ✅ Debug
+            print(f"📤 Sending payload: {payload.hex().upper()}")
+
+            # ✅ Build and send frame
+            frame = self.build_frame(mid=MID_SET_FILTER, payload=payload)
+            self.send(frame)
+
+            # ✅ Wait for response
+            response = self.receive_response(mid=MID_SET_FILTER)
+
+            # ✅ Handle response
+            status = response.get('status')
+            if status == 0x00:
+                print(f"✅ Filter settings applied successfully: Time={repeated_time_ms} ms, RSSI={rssi_threshold}")
+            else:
+                error_map = {
+                    0x01: "❌ Parameter error",
+                    0x02: "❌ Save failed"
+                }
+                desc = error_map.get(status, "❌ Unknown error")
+                raise Exception(f"Failed with status 0x{status:02X}: {desc}")
+
+        except Exception as e:
+            print(f"❌ Error setting filter settings: {e}")
+
+
+
+    def receive_response(self, mid: int, timeout: float = 1.0) -> dict:
+        """
+        Nhận frame phản hồi từ đầu đọc Nation tương ứng với MID yêu cầu.
+        Trả về dict: {mid, status, data}
+        """
+        import time
+        start_time = time.time()
+        buffer = b""
+
+        while time.time() - start_time < timeout:
+            raw = self.receive(128)
+            if not raw:
+                time.sleep(0.01)
+                continue
+
+            buffer += raw
+            frames = self.extract_valid_frames(buffer)
+
+            for frame in frames:
+                try:
+                    parsed = self.parse_frame(frame)
+                    if parsed['mid'] == mid:
+                        status = parsed['data'][0] if len(parsed['data']) >= 1 else None
+                        data = parsed['data'][1:] if len(parsed['data']) > 1 else b""
+                        return {
+                            "mid": mid,
+                            "status": status,
+                            "data": data
+                        }
+                except Exception as e:
+                    print(f"⚠️ Lỗi parse frame phản hồi: {e}")
+                    continue
+
+            # Nếu không có frame hợp lệ, tiếp tục chờ
+            time.sleep(0.01)
+
+        raise TimeoutError(f"❌ Không nhận được phản hồi MID=0x{mid:02X} sau {timeout} giây")
+
 
     def _receive_inventory_loop(self):
         while self._inventory_running:
@@ -1067,6 +1183,7 @@ class NationReader:
                 "failed_addr": None,
             }
 
+
     def write_epc_tag_auto(
         self,
         new_epc_hex: str,
@@ -1194,23 +1311,108 @@ class NationReader:
                 "failed_addr": None,
             }
 
+    # def write_to_target_tag(
+    #     self,
+    #     target_tag_epc: str,
+    #     new_epc_hex: str,
+    #     access_pwd: int = None,
+    #     overwrite_pc: bool = False,
+    #     prefix_words: int = 0,
+    #     timeout: float = 2.0,
+    #     scan_timeout: float = 2.0,
+    # ):
+    #     """
+    #     Inventory until `target_tag_epc` is seen (up to `scan_timeout`),
+    #     then write `new_epc_hex` to it, using validated EPC and calculated start word.
+    #     """
+    #     print(f"🔍 Scanning for tag with EPC '{target_tag_epc}' (up to {scan_timeout}s) …")
 
-    def write_to_target_tag(
+    #     found_event = threading.Event()
+
+    #     def tag_callback(tag: dict):
+    #         epc = tag.get("epc", "").upper()
+    #         print(f"👀 Tag seen: {epc}")
+    #         if epc == target_tag_epc.upper():
+    #             print(
+    #                 f"  ✅ Found target tag: EPC={epc}  "
+    #                 f"(RSSI={tag.get('rssi')}, Antenna={tag.get('antenna_id')})"
+    #             )
+    #             found_event.set()
+
+    #     # 1 · Start inventory in a non-blocking way
+    #     self.start_inventory_with_mode(mode=0, callback=tag_callback)
+        
+        
+    #     try:
+    #         if not found_event.wait(timeout=scan_timeout):
+    #             print(
+    #                 f"❌ Tag '{target_tag_epc}' not found within {scan_timeout}s. "
+    #                 "Place the tag closer to the antenna and try again."
+    #             )
+    #             return
+
+    #         # 2 · Validate EPCs and calculate start word
+    #         try:
+    #             validated_new_epc = self.validate_epc_hex(new_epc_hex)
+    #             validated_match_epc = self.validate_epc_hex(target_tag_epc)
+    #         except Exception as e:
+    #             print(f"❌ EPC validation error: {e}")
+    #             return
+
+    #         start_word = self.calculate_start_word(new_epc_hex, overwrite_pc=overwrite_pc, prefix_words=prefix_words)
+
+    #         # 3 · Write
+    #         print(f"📝 Writing new EPC '{new_epc_hex}' (start_word={start_word}) …")
+    #         result = self.write_epc_tag(
+    #             epc_hex=new_epc_hex,
+    #             antenna_id=1,
+    #             match_epc_hex=target_tag_epc,   # match old EPC
+    #             access_password=access_pwd,
+    #             start_word=start_word,
+    #             timeout=timeout,
+    #         )
+    #         print("Write EPC result:", result)
+
+    #         # 4 · Post-write verification
+    #         if result.get("success"):
+    #             print("🔄 Verifying new EPC …")
+    #             # quick re-scan for the *new* EPC
+    #             verified_event = threading.Event()
+
+    #             def verify_cb(tag):
+    #                 if tag.get("epc", "").upper() == new_epc_hex.upper():
+    #                     verified_event.set()
+
+    #             self.start_inventory_with_mode(mode=0, callback=verify_cb)
+    #             if verified_event.wait(timeout=1.5):
+    #                 print("✅ Verification OK — tag now reports new EPC.")
+    #             else:
+    #                 print("⚠️  Write may have succeeded, but tag not seen with new EPC yet.")
+    #             self.stop_inventory()
+    #         else:
+    #             print("⚠️  Write failed; no verification performed.")
+
+    #     finally:
+    #         # Ensure inventory is stopped if any exception occurs
+    #         self.stop_inventory()
+
+
+    def write_epc_to_target_auto(
         self,
         target_tag_epc: str,
         new_epc_hex: str,
         access_pwd: int = None,
-        overwrite_pc: bool = False,
-        prefix_words: int = 0,
         timeout: float = 2.0,
         scan_timeout: float = 2.0,
+        verify: bool = True,
+        overwrite_pc: bool = True,
+        prefix_words: int = 0,
     ):
         """
-        Inventory until `target_tag_epc` is seen (up to `scan_timeout`),
-        then write `new_epc_hex` to it, using validated EPC and calculated start word.
+        Scan for a tag with EPC `target_tag_epc`, then write `new_epc_hex` to it,
+        automatically handling PC bits, word length, and start_word.
         """
         print(f"🔍 Scanning for tag with EPC '{target_tag_epc}' (up to {scan_timeout}s) …")
-
         found_event = threading.Event()
 
         def tag_callback(tag: dict):
@@ -1223,10 +1425,8 @@ class NationReader:
                 )
                 found_event.set()
 
-        # 1 · Start inventory in a non-blocking way
         self.start_inventory_with_mode(mode=0, callback=tag_callback)
-        time.sleep(10)
-        
+
         try:
             if not found_event.wait(timeout=scan_timeout):
                 print(
@@ -1235,32 +1435,42 @@ class NationReader:
                 )
                 return
 
-            # 2 · Validate EPCs and calculate start word
+            # Validate EPCs
             try:
-                validated_new_epc = self.validate_epc_hex(new_epc_hex)
-                validated_match_epc = self.validate_epc_hex(target_tag_epc)
+                self.validate_epc_hex(new_epc_hex)
+                self.validate_epc_hex(target_tag_epc)
             except Exception as e:
                 print(f"❌ EPC validation error: {e}")
                 return
 
-            start_word = self.calculate_start_word(new_epc_hex, overwrite_pc=overwrite_pc, prefix_words=prefix_words)
+            # --- Auto-calculate PC bits and word length ---
+            epc_hex = new_epc_hex.strip().upper()
+            word_len = (len(epc_hex) + 3) // 4  # Word count (4 hex chars = 2 bytes)
+            pc_bits = word_len << 11            # PC word: upper 5 bits = word_len
+            pc_hex = f"{pc_bits:04X}"
+            full_epc_hex = pc_hex + epc_hex.ljust(word_len * 4, '0')
 
-            # 3 · Write
-            print(f"📝 Writing new EPC '{new_epc_hex}' (start_word={start_word}) …")
+            # --- Calculate start_word ---
+            start_word = self.calculate_start_word(
+                new_epc_hex,
+                overwrite_pc=overwrite_pc,
+                prefix_words=prefix_words
+            )
+
+            print(f"📝 Writing new EPC '{new_epc_hex}' (full hex: {full_epc_hex}, start_word={start_word}) …")
             result = self.write_epc_tag(
-                epc_hex=new_epc_hex,
+                epc_hex=full_epc_hex,
                 antenna_id=1,
-                match_epc_hex=target_tag_epc,   # match old EPC
+                match_epc_hex=target_tag_epc,
                 access_password=access_pwd,
                 start_word=start_word,
                 timeout=timeout,
             )
             print("Write EPC result:", result)
 
-            # 4 · Post-write verification
-            if result.get("success"):
+            # Optional verification
+            if verify and result.get("success"):
                 print("🔄 Verifying new EPC …")
-                # quick re-scan for the *new* EPC
                 verified_event = threading.Event()
 
                 def verify_cb(tag):
@@ -1273,13 +1483,13 @@ class NationReader:
                 else:
                     print("⚠️  Write may have succeeded, but tag not seen with new EPC yet.")
                 self.stop_inventory()
-            else:
+            elif not result.get("success"):
                 print("⚠️  Write failed; no verification performed.")
 
         finally:
-            # Ensure inventory is stopped if any exception occurs
             self.stop_inventory()
-   
+            
+            
     @staticmethod   
     def validate_epc_hex(epc_hex: str) -> bytes:
         """
@@ -1306,6 +1516,7 @@ class NationReader:
 
         return data
     
+    
     @staticmethod
     def calculate_start_word(epc_hex: str, *, overwrite_pc: bool = False, prefix_words: int = 0) -> int:
         """
@@ -1329,61 +1540,192 @@ class NationReader:
     ################################################################################
     #                            ANT HEADER                                        #
     ################################################################################
-
-
-    def query_ext_ant_config(self) -> dict[int, int]:
+    def query_enabled_ant_mask(self) -> int:
         """
-        Query the extended antenna hub configuration.
-        MID = 0x08, CAT = 0x01
-        Returns a dict: {main_antenna_id: mask}
+        Query the enabled antenna mask.
+        MID = 0x02, CAT = 0x01
+        Returns an integer mask where each bit represents an enabled antenna.
         """
         try:
             self.uart.flush_input()
-            frame = self.build_frame(mid=0x0208, payload=b'', rs485=False)
+            frame = self.build_frame(mid=0x0202, payload=b'', rs485=False)
             print(f"📤 Sent frame: {frame.hex().upper()}")
             self.uart.send(frame)
             time.sleep(0.1)
             raw = self.uart.receive(64)
             if not raw:
-                print("❌ No response for extended antenna config query.")
-                return {}
+                print("❌ No response for enabled antenna mask query.")
+                return 0
 
             frames = self.extract_valid_frames(raw)
             if not frames:
                 print("❌ No valid frames extracted.")
-                return {}
+                return 0
 
             for f in frames:
                 parsed = self.parse_frame(f)
-                if parsed["mid"] != 0x08:
+                if parsed["mid"] != 0x02:
                     print(f"❌ Unexpected MID in response: 0x{parsed['mid']:02X}")
                     continue
 
                 data = parsed["data"]
-                masks = {}
-                i = 0
-                while i + 3 <= len(data):
-                    pid = data[i]
-                    if not (1 <= pid <= 0x20):
-                        break
-                    mask = int.from_bytes(data[i+1:i+3], byteorder="big")
-                    masks[pid] = mask
-                    self._ext_ant_masks[pid] = mask
-                    i += 3
-                print(f"📥 Queried extended antenna config: {masks}")
-                return masks
+                if len(data) < 2:
+                    print("❌ Invalid data length in response.")
+                    continue
 
-            print("❌ No MID=0x08 frame found.")
-            return {}
+                mask = int.from_bytes(data[:2], byteorder="big")
+                print(f"📥 Queried enabled antenna mask: {mask:#06X}")
+                return mask
+
+            print("❌ No MID=0x02 frame found.")
+            return 0
         except Exception as e:
-            print(f"❌ Exception in query_ext_ant_config: {e}")
-            return {}
+            print(f"❌ Exception in query_enabled_ant_mask: {e}")
+            return 0
+
+    def parse_reader_power_response(self,payload: bytes):
+        """
+        Phân tích phản hồi từ lệnh MID=0x02 (Query Reader Power)
+        Payload là danh sách các cặp (Antenna ID, Power)
+        """
+        if len(payload) % 2 != 0:
+            raise ValueError("Payload không hợp lệ, độ dài phải là bội số của 2")
+
+        antenna_power_list = []
+
+        for i in range(0, len(payload), 2):
+            antenna_id = payload[i]
+            power_dbm = payload[i + 1]
+            antenna_power_list.append((antenna_id, power_dbm))
+
+        return antenna_power_list
+    
+    def enable_ant(self, ant_id: int, save: bool = True) -> bool:
+        """
+        Enable a single antenna and optionally save the state.
+        """
+        if not (1 <= ant_id <= 32):
+            print(f"❌ Invalid antenna ID: {ant_id}")
+            return False
+        try:
+            # Query current mask
+            mask = self.query_enabled_ant_mask()
+            new_mask = mask | (1 << (ant_id - 1))
+            # Build payload: [mask (4 bytes)] + [PID=0xFF, persist flag]
+            payload = new_mask.to_bytes(4, 'big')
+            if save is not None:
+                payload += b'\xFF' + (b'\x01' if save else b'\x00')
+            frame = self.build_frame(mid=0x0203, payload=payload)
+            self.uart.flush_input()
+            self.uart.send(frame)
+            raw = self.uart.receive(64)
+            parsed = self.parse_frame(raw)
+            if parsed["mid"] == 0x03 and parsed["data"] and parsed["data"][0] == 0x00:
+                print(f"✅ Enabled antenna {ant_id} (mask={new_mask:08X}, save={save})")
+                return True
+            else:
+                print(f"❌ Failed to enable antenna {ant_id}")
+                return False
+        except Exception as e:
+            print(f"❌ Exception in enable_ant: {e}")
+            return False
+
+
+    def disable_ant(self, ant_id: int, save: bool = True) -> bool:
+        """
+        Disable a single antenna and optionally save the state.
+        """
+        if not (1 <= ant_id <= 32):
+            print(f"❌ Invalid antenna ID: {ant_id}")
+            return False
+        try:
+            # Query current mask
+            mask = self.query_enabled_ant_mask()
+            new_mask = mask & ~(1 << (ant_id - 1))
+            # Build payload: [mask (4 bytes)] + [PID=0xFF, persist flag]
+            payload = new_mask.to_bytes(4, 'big')
+            if save is not None:
+                payload += b'\xFF' + (b'\x01' if save else b'\x00')
+            frame = self.build_frame(mid=0x0203, payload=payload)
+            self.uart.flush_input()
+            self.uart.send(frame)
+            raw = self.uart.receive(64)
+            parsed = self.parse_frame(raw)
+            if parsed["mid"] == 0x03 and parsed["data"] and parsed["data"][0] == 0x00:
+                print(f"✅ Disabled antenna {ant_id} (mask={new_mask:08X}, save={save})")
+                return True
+            else:
+                print(f"❌ Failed to disable antenna {ant_id}")
+                return False
+        except Exception as e:
+            print(f"❌ Exception in disable_ant: {e}")
+            return False
+
+
+    def build_antenna_mask(self,antenna_ids: list[int]) -> int:
+        """
+        Chuyển danh sách số ăng-ten (1-based) thành giá trị mask 32-bit
+        Ví dụ: [1,2,3,4] → 0x0000000F
+        """
+        mask = 0
+        for aid in antenna_ids:
+            if not (1 <= aid <= 32):
+                raise ValueError(f"Antenna ID {aid} ngoài phạm vi hợp lệ (1-32)")
+            mask |= (1 << (aid - 1))
+        return mask
+    # def query_ext_ant_config(self) -> dict[int, int]:
+    #     """
+    #     Query the extended antenna hub configuration.
+    #     MID = 0x08, CAT = 0x01
+    #     Returns a dict: {main_antenna_id: mask}
+    #     """
+    #     try:
+    #         self.uart.flush_input()
+    #         frame = self.build_frame(mid=0x0208, payload=b'', rs485=False)
+    #         print(f"📤 Sent frame: {frame.hex().upper()}")
+    #         self.uart.send(frame)
+    #         time.sleep(0.1)
+    #         raw = self.uart.receive(64)
+    #         if not raw:
+    #             print("❌ No response for extended antenna config query.")
+    #             return {}
+
+    #         frames = self.extract_valid_frames(raw)
+    #         if not frames:
+    #             print("❌ No valid frames extracted.")
+    #             return {}
+
+    #         for f in frames:
+    #             parsed = self.parse_frame(f)
+    #             if parsed["mid"] != 0x08:
+    #                 print(f"❌ Unexpected MID in response: 0x{parsed['mid']:02X}")
+    #                 continue
+
+    #             data = parsed["data"]
+    #             masks = {}
+    #             i = 0
+    #             while i + 3 <= len(data):
+    #                 pid = data[i]
+    #                 if not (1 <= pid <= 0x20):
+    #                     break
+    #                 mask = int.from_bytes(data[i+1:i+3], byteorder="big")
+    #                 masks[pid] = mask
+    #                 self._ext_ant_masks[pid] = mask
+    #                 i += 3
+    #             print(f"📥 Queried extended antenna config: {masks}")
+    #             return masks
+
+    #         print("❌ No MID=0x08 frame found.")
+    #         return {}
+    #     except Exception as e:
+    #         print(f"❌ Exception in query_ext_ant_config: {e}")
+    #         return {}
         
         
     ################################################################################
     #                            PROFILE HEADER                                    #
     ################################################################################
-    #TODO: It's not still optimise
+
     def select_profile(self, profile_id: int) -> bool:
         """
         Selects a baseband profile by ID (0, 1, or 2).
@@ -1445,7 +1787,6 @@ class NationReader:
                 "inventory_flag": baseband.get("inventory_flag")
             }
             
-            
 
             # Frequency band
             freq_band = self.query_rf_band()
@@ -1472,103 +1813,136 @@ class NationReader:
             print(f"❌ Failed to get profile: {e}")
             return {"error": str(e)}
 
-
-    def query_rf_band(self) -> str:
-        """
-        Queries the current RF frequency band (e.g., FCC, ETSI, JP).
-        MID = 0x0204
-        """
-        band_map = {
-            0x00: "China (920–925 / 840–845 MHz)",
-            0x01: "FCC (902–928 MHz)",
-            0x02: "ETSI (865–868 MHz)",
-            0x03: "Japan (916.8–920.4 MHz)",
-            0x04: "Taiwan (922.25–927.75 MHz)",
-            0x05: "Indonesia (923.125–925.125 MHz)",
-            0x06: "Russia (866.6–867.4 MHz)"
+    
+    # Inside your NationReader class
+    def query_rf_band(self):
+        RF_BAND_CODES = {
+            0: "CN 920–925 MHz",
+            1: "CN 840–845 MHz",
+            2: "CN Dual-band 840–845 + 920–925 MHz",
+            3: "FCC 902–928 MHz",
+            4: "ETSI 866–868 MHz",
+            5: "JP 916.8–920.4 MHz",
+            6: "TW 922.25–927.75 MHz",
+            7: "ID 923.125–925.125 MHz",
+            8: "RUS 866.6–867.4 MHz"
         }
+        CAT_RF_BAND = 0x02
+        MID_RF_BAND = 0x04
 
         try:
             self.uart.flush_input()
-            frame = self.build_frame(mid=0x0204, payload=b'', rs485=self.rs485)
-            self.uart.send(frame)
+            frame = self.build_frame(mid=(CAT_RF_BAND << 8) | MID_RF_BAND, payload=b'')
+            print(f"📤 Sending frame: {frame.hex().upper()}")
+            self.send(frame)
+            raw = self.receive(64)
+            parsed = self.parse_frame(raw)
+            print(f"📥 Parsed frame: CAT=0x{parsed['category']:02X}, MID=0x{parsed['mid']:02X}, Data={parsed['data'].hex().upper()}")
 
-            time.sleep(0.1)
-            raw = self.uart.receive(64)
-            if not raw:
-                raise Exception("❌ No response for RF band query.")
+            if parsed["category"] != CAT_RF_BAND or parsed["mid"] != MID_RF_BAND:
+                raise ValueError(f"❌ Unexpected response: CAT=0x{parsed['category']:02X}, MID=0x{parsed['mid']:02X}")
 
-            frame = self.parse_frame(raw)
-            if frame["mid"] != 0x04:
-                raise Exception("❌ Unexpected MID in RF band response.")
-
-            data = frame["data"]
+            data = parsed.get('data', b'')
             if len(data) < 1:
-                raise Exception("❌ No band byte in response.")
+                raise ValueError("⚠️ Invalid response length for RF band query")
+
             band_code = data[0]
-            
-            return band_map.get(band_code, f"Unknown (code: 0x{band_code:02X})")
-
+            band_name = RF_BAND_CODES.get(band_code, f"Unknown ({band_code})")
+            print(f"📡 Current RF Band: {band_name} [Code={band_code}]")
+            return {
+                "band_code": band_code,
+                "band_name": band_name
+            }
         except Exception as e:
-            print(f"❌ Error in query_rf_band: {e}")
-            return "Error"
+            print(f"❌ Error querying RF band: {e}")
+            return None
 
-
-
-    def set_rf_band(self, band_code: int, persistence: bool = True) -> bool:
+    def set_rf_band(self, band_code: int, persist: bool = True):
         """
-        Sets the RF frequency band.
-        MID = 0x0203
-
-        :param band_code: Band code (0x00–0x06)
-        :param persistence: True to save after reboot, False for temporary
-        :return: True if success, False otherwise
+        Set the RF frequency band of the reader (MID = 0x03, CAT = 0x02).
+        - band_code: 0–8 (see protocol)
+        - persist: True to save after power-down, False for temporary
+        Returns True if successful, False otherwise.
         """
-        band_names = {
-            0x00: "China (840–845 + 920–925 MHz)",
-            0x01: "FCC (902–928 MHz)",
-            0x02: "ETSI (865–868 MHz)",
-            0x03: "Japan (916.8–920.4 MHz)",
-            0x04: "Taiwan (922.25–927.75 MHz)",
-            0x05: "Indonesia (923.125–925.125 MHz)",
-            0x06: "Russia (866.6–867.4 MHz)"
+        RF_BAND_CODES = {
+            0: "CN 920–925 MHz",
+            1: "CN 840–845 MHz",
+            2: "CN Dual-band 840–845 + 920–925 MHz",
+            3: "FCC 902–928 MHz",
+            4: "ETSI 866–868 MHz",
+            5: "JP 916.8–920.4 MHz",
+            6: "TW 922.25–927.75 MHz",
+            7: "ID 923.125–925.125 MHz",
+            8: "RUS 866.6–867.4 MHz"
         }
+        CAT_SET_RF_BAND = 0x02
+        MID_SET_RF_BAND = 0x03
 
-        if band_code not in band_names:
-            print(f"❌ Invalid RF band code: 0x{band_code:02X}")
+        try:
+            if not (0 <= band_code <= 8):
+                raise ValueError("Invalid band_code. Must be between 0–8.")
+
+            self.stop_inventory()
+            self.is_idle()
+            self.uart.flush_input()
+            time.sleep(0.5)
+
+            # Build payload and frame
+            payload = bytes([band_code])
+            frame = self.build_frame(mid=(CAT_SET_RF_BAND << 8) | MID_SET_RF_BAND, payload=payload)
+            print(f"📤 Setting RF Band: {RF_BAND_CODES.get(band_code, 'Unknown')} [Persist={'Yes' if persist else 'No'}]")
+            print(f"📤 Sending frame: {frame.hex().upper()}")
+            self.send(frame)
+
+            # Wait and parse response
+            timeout = 1.0
+            start_time = time.time()
+
+            while time.time() - start_time < timeout:
+                raw = self.receive(64)
+                if not raw:
+                    time.sleep(0.01)
+                    continue
+
+                print(f"📥 Received raw data: {raw.hex().upper()}")
+
+                try:
+                    parsed = self.parse_frame(raw)
+                    print(f"📥 Parsed frame: CAT=0x{parsed['category']:02X}, MID=0x{parsed['mid']:02X}, Data={parsed['data'].hex().upper()}")
+                    data = parsed.get("data", b"")
+                except Exception as e:
+                    print(f"⚠️ Frame parse error: {e}")
+                    continue
+
+                # Check both category and mid
+                if parsed["category"] != CAT_SET_RF_BAND or parsed["mid"] != MID_SET_RF_BAND:
+                    print(f"⚠️ Ignored frame with CAT=0x{parsed['category']:02X}, MID=0x{parsed['mid']:02X} (expecting CAT=0x02, MID=0x03)")
+                    continue
+                print(f"📥 RF Band set response: {data.hex().upper()}")
+
+                if len(data) < 1:
+                    raise ValueError("⚠️ Invalid response length for set RF band")
+
+                status = data[0]
+                if status == 0x00:
+                    print(f"✅ RF Band set to {RF_BAND_CODES[band_code]} [Persist={'Yes' if persist else 'No'}]")
+                    return True
+                else:
+                    error_map = {
+                        0x01: "Unsupported frequency by hardware",
+                        0x02: "Save failed"
+                    }
+                    reason = error_map.get(status, "Unknown error")
+                    print(f"❌ Failed to set RF band (status=0x{status:02X}): {reason}")
+                    return False
+
+            print("❌ No valid response for set_rf_band within timeout.")
             return False
 
-        try:
-            self.uart.flush_input()
-            payload = bytes([band_code, 0x01 if persistence else 0x00])
-            frame = self.build_frame(mid=0x0203, payload=payload, rs485=self.rs485)
-            self.uart.send(frame)
-
-            time.sleep(0.1)
-            raw = self.uart.receive(64)
-            if not raw:
-                print("❌ No response from reader.")
-                return False
-
-            parsed = self.parse_frame(raw)
-            data = parsed["data"]
-
-            if parsed["mid"] != 0x03:
-                # print(f"❌ Unexpected MID in response: 0x{parsed['mid']:02X}")
-                return False
-
-            if len(data) < 1 or data[0] != 0x00:
-                print(f"❌ Failed to set RF band. Result code: 0x{data[0]:02X}")
-                return False
-
-            print(f"✅ RF band set to {band_names[band_code]}")
-            return True
-
         except Exception as e:
-            print(f"❌ Exception in set_rf_band: {e}")
-        return False
-
-
+            print(f"❌ Error setting RF band: {e}")
+            return False
+        
     def query_working_frequency(self) -> dict:
         """
         Queries the reader's working frequency configuration.
@@ -1752,8 +2126,6 @@ class NationReader:
             # print(f"❌ Exception in control_buzzer: {e}")
             return False
         
-
-    
 
     #################################################################################
     #                            SESSION HEADER                                     #
@@ -1941,7 +2313,7 @@ class NationReader:
             frame = self.build_frame(mid=MID.QUERY_BASEBAND, payload=b'', rs485=False)
             self.uart.send(frame)
             
-            print(f"🧩 seht response: {frame.hex()}")
+            
             raw = self.uart.receive(64)
             if not raw:
                 print("❌ No response for baseband profile query.")

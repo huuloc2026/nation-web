@@ -14,6 +14,7 @@ import { TableWriteTag } from "./components/TableWriteTag"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@radix-ui/react-label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 // Types
 export interface Tag {
@@ -51,7 +52,10 @@ export default function Dashboard() {
   const [writeParams, setWriteParams] = useState<any>(null)
   const [writeResult, setWriteResult] = useState<any>(null)
   const [writeLoading, setWriteLoading] = useState(false)
-
+  const [detectedEPCs, setDetectedEPCs] = useState<string[]>([])
+  const [selectedEPC, setSelectedEPC] = useState<string>("")
+  const [epcScanLoading, setEpcScanLoading] = useState(false)
+  const [selectedAntennas, setSelectedAntennas] = useState<number[]>([1])
   // Antenna settings
   const [antennaSettings, setAntennaSettings] = useState<AntennaSettings>({
     antenna1: true,
@@ -64,63 +68,55 @@ export default function Dashboard() {
   const socketRef = useRef<Socket | null>(null)
   const tagMapRef = useRef<Map<string, Tag>>(new Map())
 
-  // --- WebSocket setup ---
+
   useEffect(() => {
-    // Connect to backend Socket.IO server
     const socket = io(import.meta.env.VITE_WS_URL ?? "http://localhost:3000", {
-      transports: ["websocket"],   // force pure WS (optional)
-      path: "/socket.io",          // match server if you changed it
-      withCredentials: false,      // change to true if you **need** cookies
-    })
-    
-    socketRef.current = socket
-    socket.on("connect", () => console.log("🔌 Socket connected:", socket.id))
-    socket.on("disconnect", (r) => console.warn("⚠️  disconnected:", r))
-    socket.on("connect_error", (err) => console.error("❌ connect_error", err.message))
-
-    // Handle tag_detected event
-    socket.on("tag_detected", (tagData: any) => {
-      // Update tagMapRef (aggregate by EPC)
-
-      console.log(`Tag detected: ${tagData.epc}, RSSI: ${tagData.rssi}, Antenna: ${tagData.antenna}`)
-      const tagMap = tagMapRef.current
-      const epc = tagData.epc
-      if (tagMap.has(epc)) {
-        const existing = tagMap.get(epc)!
-        existing.count += 1
-        existing.lastSeen = tagData.timestamp
-        if (tagData.rssi > existing.rssi) existing.rssi = tagData.rssi
-        if (!`${existing.antenna}`.includes(`${tagData.antenna}`)) {
-          existing.antenna = `${existing.antenna}, ${tagData.antenna}`
-        }
+      transports: ["websocket"],
+      path: "/socket.io",
+      withCredentials: false,
+    });
+  
+    socketRef.current = socket;
+  
+    const handleTagDetected = (tagData: any) => {
+      const map = tagMapRef.current;
+      const { epc } = tagData;
+      if (map.has(epc)) {
+        const t = map.get(epc)!;
+        t.count += 1;
+        t.lastSeen = tagData.timestamp;
+        t.rssi = Math.max(t.rssi, tagData.rssi);
+        const antennas = new Set(
+          `${t.antenna}`.split(",").map(a=>a.trim()).filter(Boolean)
+        );
+        antennas.add(String(tagData.antenna));
+        t.antenna = Array.from(antennas).join(", ");
       } else {
-        tagMap.set(epc, {
-          id: tagMap.size + 1,
+        map.set(epc, {
+          id: map.size + 1,
           epc,
           count: 1,
           antenna: tagData.antenna,
           rssi: tagData.rssi,
           lastSeen: tagData.timestamp,
-        })
+        });
       }
-      // Update state
-      const arr = Array.from(tagMap.values())
-      setTags(arr)
-      setDetectedTags(arr.length)
-      setTotalTags(arr.reduce((sum, t) => sum + t.count, 0))
-    })
-
-    // Optionally handle inventory_end event
-    socket.on("inventory_end", () => {
-      // You may want to stop inventory or show a message
-      setIsInventoryRunning(false)
-    })
-
+      const arr = Array.from(map.values());
+      setTags(arr);
+      setDetectedTags(arr.length);
+      setTotalTags(arr.reduce((s, t) => s + t.count, 0));
+    };
+  
+    socket.on("tag_detected", handleTagDetected);
+    socket.on("inventory_end", () => setIsInventoryRunning(false));
+  
     return () => {
-      socket.disconnect()
-      socketRef.current = null
-    }
-  }, [])
+      socket.off("tag_detected", handleTagDetected); 
+      socket.disconnect();                           
+      socketRef.current = null;
+    };
+  }, []);
+  
 
   // Timer effect
   useEffect(() => {
@@ -148,7 +144,7 @@ export default function Dashboard() {
     setDetectedTags(0)
     setTotalTags(0)
     setIsInventoryRunning(true)
-    await startInventory()
+    await startInventory(selectedAntennas)
     // Optionally handle result for user feedback
   }
 
@@ -223,15 +219,33 @@ export default function Dashboard() {
     setEpcInput("")
     setWriteParams(null)
     setWriteResult(null)
+    setDetectedEPCs([])
+    setSelectedEPC("")
+    setEpcScanLoading(true)
+    try {
+      await startInventory(selectedAntennas)
+      setTimeout(async () => {
+        await stopInventory()
+        // Use fetch directly for /api/get_tags as there is no apiCall for this
+        const res = await startInventory(selectedAntennas)
+        const data = await res.json()
+        const epcs = Array.isArray(data.data) ? Array.from(new Set(data.data.map((t: any) => String(t.epc)))) as string[] : []
+        setDetectedEPCs(epcs)
+        setSelectedEPC(typeof epcs[0] === "string" ? epcs[0] : "")
+        setEpcScanLoading(false)
+      }, 2000)
+    } catch (e) {
+      setEpcScanLoading(false)
+      setDetectedEPCs([])
+    }
   }
 
   const handleSubmitWrite = async () => {
-    if (!epcInput.trim()) {
-      toast("EPC không được để trống", { style: { background: "#ef4444", color: "#fff" } })
+    if (!epcInput.trim() || !selectedEPC) {
+      toast("Vui lòng chọn EPC và nhập EPC mới", { style: { background: "#ef4444", color: "#fff" } })
       return
     }
     setWriteLoading(true)
-    // Example: always use antenna 1, EPC area, start word 2
     const params = {
       antennaMask: 1,
       dataArea: 1,
@@ -239,33 +253,39 @@ export default function Dashboard() {
       epcHex: epcInput.trim().toUpperCase(),
     }
     setWriteParams(params)
-    // TODO: Call actual API to write EPC and get result
-    // call writeEPC(params)
-    // For demo purposes, we simulate a successful write after 1.2 seconds
-    // You can replace this with actual API call logic
-   
-    const data = await WriteEPCtag(params.antennaMask, params.dataArea, params.startWord, params.epcHex)
-    console.log("Write EPC result:", data)  
-
-    
-    // Simulate result for demo
-
-
-    setTimeout(() => {
+    try {
+      // Use WriteEPCtag from rfid.ts
+      const data = await WriteEPCtag(
+        params.antennaMask,
+        params.dataArea,
+        params.startWord,
+        params.epcHex,
+        selectedEPC,
+        undefined,
+        2.0
+      )
       setWriteResult({
-        success: true,
-        result_code: 0,
-        result_msg: "Write successfully",
+        success: data.success,
+        result_code: data.result_code ?? (data.success ? 0 : -1),
+        result_msg: data.result_msg || data.message || (data.success ? "Write successfully" : "Write failed"),
+        failed_addr: data.failed_addr ?? null,
+      })
+      if (data.success) {
+        toast("Ghi EPC thành công", { description: "EPC đã được ghi vào tag" })
+        setWriteDialogOpen(false)
+      } else {
+        toast("Ghi EPC thất bại", { description: data.result_msg || data.message || "Write failed", style: { background: "#ef4444", color: "#fff" } })
+      }
+    } catch (e: any) {
+      setWriteResult({
+        success: false,
+        result_code: -99,
+        result_msg: e?.message || "Exception",
         failed_addr: null,
       })
-
-      toast("Ghi EPC thành công", {
-        description: "EPC đã được ghi vào tag",
-      })
-      setWriteDialogOpen(false) // Close dialog after success
-
-      setWriteLoading(false)
-    }, 1200)
+      toast("Không thể ghi EPC tag.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+    }
+    setWriteLoading(false)
   }
 
   return (
@@ -282,6 +302,7 @@ export default function Dashboard() {
           antennaSettings={antennaSettings}
           setAntennaSettings={setAntennaSettings}
           handleAntennaChange={handleAntennaChange}
+          onSetAntenna={(ants: number[]) => setSelectedAntennas(ants)}
         />
       </div>
 
@@ -300,6 +321,7 @@ export default function Dashboard() {
             handleAntennaChange={handleAntennaChange}
             handleGetPower={handleGetPower}
             handleSetPower={handleSetPower}
+            onSetAntenna={(ants: number[]) => setSelectedAntennas(ants)}
           />
         </SheetContent>
       </Sheet>
@@ -317,7 +339,7 @@ export default function Dashboard() {
             </SheetTrigger>
           </Sheet>
           <div className="flex-1">
-            <h1 className="text-lg font-semibold">IoT Device Dashboard</h1>
+            <h1 className="text-lg font-semibold">Nation Dashboard</h1>
           </div>
         </header>
 
@@ -381,21 +403,54 @@ export default function Dashboard() {
                   <DialogTitle>Ghi EPC vào Tag</DialogTitle>
                 </DialogHeader>
                 <DialogDescription>
-        
-           </DialogDescription>
-                <div className="space-y-2">
-                  <Label htmlFor="epc-input">EPC </Label>
-                  <Input
-                    id="epc-input"
-                    value={epcInput}
-                    onChange={e => setEpcInput(e.target.value)}
-                    placeholder="EPC"
-                    disabled={writeLoading}
-                    autoFocus
-                  />
-                </div>
+                  {epcScanLoading ? (
+                    <div className="text-center py-4">Đang quét thẻ... Vui lòng chờ 2 giây.</div>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor="epc-select">Chọn EPC hiện tại</Label>
+                        <Select
+                          value={selectedEPC}
+                          onValueChange={setSelectedEPC}
+                          disabled={epcScanLoading || detectedEPCs.length === 0}
+                        >
+                          <SelectTrigger id="epc-select" className="w-full">
+                            <SelectValue placeholder="Chọn EPC" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {detectedEPCs.length === 0 ? (
+                              <SelectItem value="" disabled>
+                                Không tìm thấy EPC nào
+                              </SelectItem>
+                            ) : (
+                              detectedEPCs.map(epc => (
+                                <SelectItem key={epc} value={epc}>
+                                  {epc}
+                                </SelectItem>
+                              ))
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2 mt-2">
+                        <Label htmlFor="epc-input">EPC mới</Label>
+                        <Input
+                          id="epc-input"
+                          value={epcInput}
+                          onChange={e => setEpcInput(e.target.value)}
+                          placeholder="Nhập EPC mới"
+                          disabled={writeLoading}
+                          autoFocus
+                        />
+                      </div>
+                    </>
+                  )}
+                </DialogDescription>
                 <DialogFooter>
-                  <Button onClick={handleSubmitWrite} disabled={writeLoading || !epcInput.trim()}>
+                  <Button
+                    onClick={handleSubmitWrite}
+                    disabled={writeLoading || epcScanLoading || !epcInput.trim() || !selectedEPC}
+                  >
                     {writeLoading ? "Đang ghi..." : "Ghi EPC"}
                   </Button>
                   <Button variant="outline" onClick={() => setWriteDialogOpen(false)} disabled={writeLoading}>

@@ -13,7 +13,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { detectPorts, getAntennaPower, setAntennaPower, enableAntennas, disableAntennas, getReaderInfo, configureBaseband, queryBasebandProfile } from "@/api/rfid"
+import { getAntennaPower, setAntennaPower, enableAntennas, disableAntennas, getReaderInfo, configureBaseband, queryBasebandProfile, detectPorts } from "@/api/rfid"
 
 interface AntennaSettings {
   antenna1: boolean
@@ -34,10 +34,11 @@ interface SidebarProps {
   antennaSettings: AntennaSettings
   setAntennaSettings: React.Dispatch<React.SetStateAction<AntennaSettings>>
   handleAntennaChange: (antenna: keyof AntennaSettings, checked: boolean) => void
-
   handleGetPower?: () => Promise<void>
   handleSetPower?: () => Promise<void>
+  onSetAntenna?: (ants: number[]) => void
 }
+
 export function Sidebar({
   className,
   isConnected,
@@ -49,6 +50,7 @@ export function Sidebar({
   antennaSettings,
   setAntennaSettings,
   handleAntennaChange,
+  onSetAntenna,
 }: SidebarProps) {
   const [powers, setPowers] = useState<{ [key: number]: number }>({
     1: 0,
@@ -63,6 +65,8 @@ export function Sidebar({
   const [readerInfo, setReaderInfo] = useState<any>(null)
   const [infoLoading, setInfoLoading] = useState(false)
 
+  
+  
   // Baseband state
   const [baseband, setBaseband] = useState({
     speed: 0,
@@ -140,18 +144,18 @@ export function Sidebar({
       const enabledAnts = Object.entries(antennaSettings)
         .filter(([_, v]) => v)
         .map(([k]) => Number(k.replace("antenna", "")))
-      const disabledAnts = Object.entries(antennaSettings)
-        .filter(([_, v]) => !v)
-        .map(([k]) => Number(k.replace("antenna", "")))
-      if (enabledAnts.length > 0) await enableAntennas(enabledAnts)
-      if (disabledAnts.length > 0) await disableAntennas(disabledAnts)
+      // Call parent callback to update selected antennas in App
+      if (onSetAntenna) onSetAntenna(enabledAnts)
       toast("Đã thiết lập trạng thái antenna.", { description: "Set Antenna" })
+      setLoading(false)
+      return enabledAnts
     } catch (e) {
       toast("Không thể thiết lập trạng thái antenna.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+      setLoading(false)
     }
-    setLoading(false)
   }
 
+  //TODO:
   // Add browser-side auto-detect RS232 port (Web Serial API)
   const handleDetectPort = async () => {
     // Try browser Web Serial API first
@@ -173,7 +177,7 @@ export function Sidebar({
             }
           }
           // Web Serial API does not provide a system path, so just show "Browser Serial"
-          setSerialPort("browser-serial")
+          setSerialPort(portLabel)
           toast("Đã chọn cổng RS232 qua trình duyệt.", { description: portLabel || "Web Serial API" })
           return
         }

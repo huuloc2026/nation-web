@@ -126,7 +126,7 @@ class RFIDWebController:
             logger.error(f"Query baseband profile error: {e}")
             return {"success": False, "message": f"Lỗi: {str(e)}"}
     
-    def start_inventory(self, target: int = 0) -> Dict:
+    def start_inventory(self, antenna_mask: int ) -> Dict:
         global inventory_thread, stop_inventory_flag, detected_tags, inventory_stats
 
         if not self.is_connected:
@@ -165,14 +165,10 @@ class RFIDWebController:
                 except Exception as e:
                     logger.error(f"❌ WebSocket emit failed: {e}")
 
-            def inventory_end_callback(reason):
-                logger.info(f"📴 Inventory ended. Reason: {reason}")
-                socketio.emit('inventory_end', {"reason": reason})
-
             def inventory_worker():
                 try:         
                     # Start inventory with callbacks
-                    self.reader.start_inventory_with_mode(mode=0,callback=tag_callback)
+                    self.reader.start_inventory_with_mode(antenna_mask=antenna_mask,callback=tag_callback)
                 except Exception as e:
                     logger.error(f"Inventory worker error: {e}")
                 finally:
@@ -401,24 +397,6 @@ class RFIDWebController:
             logger.error(f"Set power error: {e}")
             return {"success": False, "message": f"Lỗi: {str(e)}"}
 
-    def write_epc_tag(self):
-        """Ghi EPC vào tag"""
-        if not self.is_connected:
-            return {"success": False, "message": "Chưa kết nối đến reader"}
-        
-        try:
-            # TODO:
-            epc = "123456789ABCDEF"  # Thay bằng EPC thực tế
-            result = self.reader.write_epc_tag(epc)
-            if result:
-                logger.info(f"✅ Ghi EPC thành công: {epc}")
-                return {"success": True, "message": f"Ghi EPC thành công: {epc}"}
-            else:
-                return {"success": False, "message": "Không thể ghi EPC vào tag"}
-        except Exception as e:
-            logger.error(f"Write EPC error: {e}")
-            return {"success": False, "message": f"Lỗi: {str(e)}"}
-    
     def write_to_target_tag(
         self,
         target_tag_epc: str,
@@ -492,9 +470,8 @@ def api_reader_info():
 def api_start_inventory():
     """API bắt đầu inventory"""
     data = request.get_json()
-    target = data.get('target', 0)
-    
-    result = rfid_controller.start_inventory(target)
+    antenna_mask = data.get('selectedAntennas')
+    result = rfid_controller.start_inventory(antenna_mask)
     return jsonify(result)
 
 @app.route('/api/stop_inventory', methods=['POST'])
@@ -590,14 +567,14 @@ def api_get_antenna_power():
     result = rfid_controller.get_antenna_power()
     return jsonify(result)
 
-@app.route('/api/get_tags', methods=['GET'])
-def api_get_tags():
-    """API lấy danh sách tags đã phát hiện"""
-    return jsonify({
-        "success": True,
-        "data": detected_tags,
-        "stats": inventory_stats
-    })
+# @app.route('/api/get_tags', methods=['GET'])
+# def api_get_tags():
+#     """API lấy danh sách tags đã phát hiện"""
+#     return jsonify({
+#         "success": True,
+#         "data": detected_tags,
+#         "stats": inventory_stats
+#     })
 
 @app.route('/api/config', methods=['GET'])
 def api_get_config():
