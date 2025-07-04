@@ -12,11 +12,7 @@ from collections import deque
 import logging
 import random
 
-# Import các hàm từ zk.py
-from zk import (
-   
-    get_profile, set_profile,
-)
+
 
 # Import configuration
 from config import get_config
