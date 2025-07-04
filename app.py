@@ -749,7 +749,7 @@ def api_write_epc_tag_auto():
     match_epc = data.get('match_epc')
     antenna_id = data.get('antenna_id', 1)
     access_pwd = data.get('access_pwd')
-    timeout = data.get('timeout', 0)
+    timeout = data.get('timeout')
     if not epc:
         return jsonify({"success": False, "message": "EPC không được để trống"})
     if not rfid_controller.is_connected or not rfid_controller.reader:

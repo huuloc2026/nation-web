@@ -107,7 +107,7 @@ export async function WriteEPCtag(
   epcHex: string,
   match_epc?: string,
   access_pwd?: string | number,
-  timeout: number = 2
+  timeout: number = 0
 ) {
   return apiCall("/api/write_epc_tag_auto", "POST", {
     epc: epcHex,

@@ -19,6 +19,9 @@ import { BAUD_RATE_OPTIONS, SERIPORT, SOCKET_URL } from "./utils/constant"
 
 import "./AppDialog.css" // Add this import at the top (create this CSS file if not exist)
 
+// Add this at the top, after imports
+const beepAudio = typeof window !== "undefined" ? new Audio("/beep.mp3") : null;
+
 // Types
 export interface Tag {
   id: number
@@ -275,6 +278,10 @@ export default function Dashboard() {
         ...prev,
         { epc, success: data.success, result_msg: data.result_msg || data.message }
       ])
+      if (data.success && beepAudio) {
+        beepAudio.currentTime = 0
+        beepAudio.play().catch(() => {})
+      }
       toast(data.success ? "Ghi thành công" : "Ghi thất bại", { description: epc })
     } catch (e: any) {
       setFileLog(prev => [
@@ -307,7 +314,6 @@ export default function Dashboard() {
           startWord: 2,
           epcHex: epc.toUpperCase(),
         }
-        // WriteEPCtag API expects single EPC, match_epc can be null for auto
         const data = await WriteEPCtag(
           params.antennaMask,
           params.dataArea,
@@ -321,6 +327,10 @@ export default function Dashboard() {
           epc,
           ...data,
         })
+        if (data.success && beepAudio) {
+          beepAudio.currentTime = 0
+          beepAudio.play().catch(() => {})
+        }
       } catch (e: any) {
         results.push({
           epc,
@@ -329,7 +339,6 @@ export default function Dashboard() {
           result_msg: e?.message || "Exception",
         })
       }
-      // Optional: small delay between writes
       await new Promise(res => setTimeout(res, 200))
     }
     setWriteResults(results)
