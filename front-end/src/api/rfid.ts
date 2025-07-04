@@ -109,11 +109,22 @@ export async function WriteEPCtag(
   access_pwd?: string | number,
   timeout: number = 2
 ) {
-  return apiCall("/api/write_epc_tag", "POST", {
+  return apiCall("/api/write_epc_tag_auto", "POST", {
     epc: epcHex,
     match_epc,
     access_pwd,
-    antenna_id: 1, // always 1 for now, or map from antennaMask if needed
+    antenna_id: 1 || antennaMask, // always 1 for now, or map from antennaMask if needed
     timeout,
+  })
+}
+
+export async function CheckWriteEPC(
+  epcHex: string,
+  antennaMask: number,
+
+) {
+  return apiCall("/api/check_write_epc", "POST", {
+    epc: epcHex,
+    antenna_id: 1 || antennaMask, 
   })
 }

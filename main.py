@@ -46,6 +46,20 @@ def on_end_callback(reason):
     print(f"📴 Inventory kết thúc. Lý do: {reasons.get(reason, 'Không rõ')}")
     
 
+def write_epc_list(reader, epc_list, antenna_id=1, access_password=None, timeout=1):
+    for epc in epc_list:
+        result = reader.write_epc_tag_auto(
+            new_epc_hex=epc,
+            match_epc_hex=None,
+            antenna_id=antenna_id,
+            access_password=access_password,
+            timeout=timeout
+        )
+        print("📝 Auto Write EPC Result:")
+        for k, v in result.items():
+            print(f"  {k}: {v}")
+        time.sleep(2)
+
 def main():
     global reader
     port = "/dev/ttyUSB0"
@@ -79,77 +93,77 @@ def main():
             # threading.Thread(target=beep, daemon=True).start()
         print(json.dumps(payload))
         return json.dumps(payload)
-    reader.configure_baseband(speed=0, q_value=1, session=0, inventory_flag=0) 
+    # reader.configure_baseband(speed=0, q_value=1, session=0, inventory_flag=0) 
     
      
-    # # infor= reader.query_baseband_profile()
-    # # print("📡 Baseband profile queried successfully.",infor)
+    # # # infor= reader.query_baseband_profile()
+    # # # print("📡 Baseband profile queried successfully.",infor)
     
     
 
-    # # session = reader.get_session()
+    # # # session = reader.get_session()
 
     
     
-    # Send config for Main Antenna 1 only
+    # # Send config for Main Antenna 1 only
 
 
-    #02/07/2025
-    # Auto write EPC (auto PC bits, word length)
-    # Example usage:
-    # target_tag = "ABCD55551100"      # The EPC you want to find and overwrite
-    # new_epc = "ABCD0284"             # The new EPC to write (hex string)
-    # reader.write_epc_to_target_auto(target_tag, new_epc)
-
-    
-    # # Query and print config
-    # config = reader.query_ext_ant_config()
-    # print("Queried antenna config:", config)
-
-    # enabled_ports = reader.get_enabled_ants()
-    # print("Enabled global antenna ports:", enabled_ports)
-
+    # #02/07/2025
+    # # Auto write EPC (auto PC bits, word length)
+    # # Example usage:
+    # # target_tag = "ABCD55551100"      # The EPC you want to find and overwrite
+    # # new_epc = "ABCD0284"             # The new EPC to write (hex string)
+    # # reader.write_epc_to_target_auto(target_tag, new_epc)
 
     
-    # # print("✅ Danh sách anten đang bật:", reader.get_enabled_ants())
+    # # # Query and print config
+    # # config = reader.query_ext_ant_config()
+    # # print("Queried antenna config:", config)
+
+    # # enabled_ports = reader.get_enabled_ants()
+    # # print("Enabled global antenna ports:", enabled_ports)
+
+
     
-    # info = reader.Query_Reader_Information()
-    # print("📡 Reader Info:")
-    # for k, v in info.items():
-    #     print(f"  {k}: {v}")
-    # config = reader.query_ext_ant_config()
-    # print("Queried extended antenna config:", config)
-    # return
-    # config = reader.query_ext_ant_config()
-    # print("Queried antenna config:", config)
+    # # # print("✅ Danh sách anten đang bật:", reader.get_enabled_ants())
+    
+    # # info = reader.Query_Reader_Information()
+    # # print("📡 Reader Info:")
+    # # for k, v in info.items():
+    # #     print(f"  {k}: {v}")
+    # # config = reader.query_ext_ant_config()
+    # # print("Queried extended antenna config:", config)
+    # # return
+    # # config = reader.query_ext_ant_config()
+    # # print("Queried antenna config:", config)
     
 
     
-    # print("Parsed antenna power response:", reader.antenna_power_list)
+    # # print("Parsed antenna power response:", reader.antenna_power_list)
     
 
 
-    #PRINT HEX mask
+    # #PRINT HEX mask
   
-    # reader.query_enabled_ant_mask()
+    # # reader.query_enabled_ant_mask()
 
 
     
     
-    # enable = reader.enable_ant(ant_id=1, save=True)
-    # if enable:
-    #     print("✅ Antenna 1 enabled successfully")  
+    # # enable = reader.enable_ant(ant_id=1, save=True)
+    # # if enable:
+    # #     print("✅ Antenna 1 enabled successfully")  
 
-    # Output: [(1, 12)]
+    # # Output: [(1, 12)]
 
 
-    setPower = {
-        1:10, 
-        2:0,
-        3:1,
-        4:1
-    }
-    reader.configure_reader_power(setPower, persistence=True)
+    # setPower = {
+    #     1:10, 
+    #     2:0,
+    #     3:1,
+    #     4:1
+    # }
+    # reader.configure_reader_power(setPower, persistence=True)
     # powers = reader.query_reader_power()
     # for ant in range(1, 5):
     #     val = powers.get(ant)
@@ -162,19 +176,21 @@ def main():
     # # print("📊 Chọn profile:", profilemock)
 
     # #KhUONG
-    # result = reader.write_epc_tag_auto(
-    #     new_epc_hex="ABCD9999",       # Auto-detect PC, word length, etc.
-    #     match_epc_hex=None,           # Optional: set to EPC of target tag if needed
-    #     antenna_id=1,                 # Or 2, 3, 4...
-    #     access_password=None,         # Optional: default None
-    #     timeout=2.0
-    # )
-    # print("📝 Auto Write EPC Result:")
-    # for k, v in result.items():
-    #     print(f"  {k}: {v}")
+    result = reader.write_epc_tag_auto(
+        new_epc_hex="ABCD1111",       # Auto-detect PC, word length, etc.
+        match_epc_hex=None,           # Optional: set to EPC of target tag if needed
+        antenna_id=1,                 # Or 2, 3, 4...
+        access_password=None,         # Optional: default None
+        timeout=1
+    )
+    print("📝 Auto Write EPC Result:")
+    for k, v in result.items():
+        print(f"  {k}: {v}")
+    time.sleep(2)
 
-
-
+    # Example usage: batch write EPCs
+    epc_batch = ["ABCD1111", "ABCD2222", "ABCD3333"]  # Replace with your EPC list
+    write_epc_list(reader, epc_batch, antenna_id=1, access_password=None, timeout=1)
 
     
     try:

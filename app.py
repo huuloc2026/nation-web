@@ -731,33 +731,75 @@ def api_tags_inventory():
         logger.error(f"Start tags inventory error: {e}")
         return {"success": False, "message": f"Lỗi: {str(e)}"}
     
-#TODO: API ghi EPC vào tag
-@app.route('/api/write_epc_tag', methods=['POST'])
-def api_write_epc_tag():
-    """API ghi EPC vào tag"""
+
+@app.route('/api/write_epc_tag_auto', methods=['POST'])
+def api_write_epc_tag_auto():
+    """
+    API ghi EPC vào tag sử dụng auto PC bits, word length, v.v.
+    Body: {
+        "epc": "ABCD1111",
+        "match_epc": null,
+        "antenna_id": 1,
+        "access_pwd": null,
+        "timeout": 1
+    }
+    """
     data = request.get_json()
     epc = data.get('epc')
-    match_epc = data.get('match_epc') 
-    access_pwd = data.get('access_pwd')  
+    match_epc = data.get('match_epc')
     antenna_id = data.get('antenna_id', 1)
-    timeout = data.get('timeout', 2.0)
+    access_pwd = data.get('access_pwd')
+    timeout = data.get('timeout', 0)
     if not epc:
         return jsonify({"success": False, "message": "EPC không được để trống"})
-
+    if not rfid_controller.is_connected or not rfid_controller.reader:
+        return jsonify({"success": False, "message": "Chưa kết nối đến reader"})
     try:
-        
-        result = rfid_controller.write_to_target_tag(
-            target_tag_epc=match_epc or epc,
+        result = rfid_controller.reader.write_epc_tag_auto(
             new_epc_hex=epc,
-            access_pwd=access_pwd,
-            overwrite_pc=False,
-            prefix_words=0,
-            timeout=timeout,
-            scan_timeout=timeout
+            match_epc_hex=match_epc,
+            antenna_id=antenna_id,
+            access_password=access_pwd,
+            timeout=timeout
         )
         return jsonify(result)
     except Exception as e:
-        logger.error(f"Write EPC error: {e}")
+        logger.error(f"Write EPC auto error: {e}")
+        return jsonify({"success": False, "message": f"Lỗi: {str(e)}"})
+    
+@app.route('/api/check_write_epc', methods=['POST'])
+def check_write_epc():
+    """
+    API kiểm tra khả năng ghi EPC vào tag
+    Body: {
+        "epc": "ABCD1111",
+        "match_epc": null,
+        "antenna_id": 1,
+        "access_pwd": null,
+        "timeout": 1
+    }
+    """
+    data = request.get_json()
+    epc = data.get('epc')
+    antenna_id = data.get('antenna_id', 1)
+
+    
+    if not epc:
+        return jsonify({"success": False, "message": "EPC không được để trống"})
+    
+    if not rfid_controller.is_connected or not rfid_controller.reader:
+        return jsonify({"success": False, "message": "Chưa kết nối đến reader"})
+    
+    try:
+        result = rfid_controller.reader.check_write_epc(
+            epcHex=epc,
+        )
+        if result is None:
+            return jsonify({"success": False, "message": "Không thể kiểm tra khả năng ghi EPC"})
+        if result is True:
+            return jsonify({"success": True, "message": "Matching"})
+    except Exception as e:
+        logger.error(f"Check write EPC error: {e}")
         return jsonify({"success": False, "message": f"Lỗi: {str(e)}"})
     
     

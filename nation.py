@@ -1190,7 +1190,7 @@ class NationReader:
         match_epc_hex: Optional[str] = None,
         antenna_id: int = 1,
         access_password: Optional[int] = None,
-        timeout: float = 2.0,
+        timeout: float = 0,
     ) -> dict:
         """
         Write new EPC to tag. Automatically calculates start_word and PC bits.
@@ -1311,6 +1311,30 @@ class NationReader:
                 "failed_addr": None,
             }
 
+
+    def check_write_epc(self,epcHex) -> bool:
+        """
+        Check if the reader supports writing EPC tags.
+        Returns True if supported, False otherwise.
+        """
+        self.stop_inventory()
+        self.uart.flush_input()
+        # Ensure reader is idle
+        def on_tag_callback(tag: dict):
+            epc = tag.get("epc", "").upper()
+            if epc == epcHex.upper():
+                print(f"✅ Tag with EPC {epc} found during write check.")
+                return True
+            else:
+                print(f"👀 Tag with EPC {epc} found, but not the one we are checking for.")
+                return False
+        self.start_inventory_with_mode(antenna_mask=[1],callback=on_tag_callback)
+        return True
+
+        
+        
+        
+        
     # def write_to_target_tag(
     #     self,
     #     target_tag_epc: str,

@@ -4,18 +4,20 @@ import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Sidebar } from "./components/Sidebar"
 import { TagTable } from "./components/TagTable"
-import { connectReader, disconnectReader, startInventory, stopInventory, WriteEPCtag } from "./api/rfid"
+import { CheckWriteEPC, connectReader, disconnectReader, startInventory, stopInventory, WriteEPCtag } from "./api/rfid"
 import { toast } from "sonner"
 import { io, Socket } from "socket.io-client"
+import * as XLSX from "xlsx"
 
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { InventoryControl } from "./components/InventoryControl"
-import { TableWriteTag } from "./components/TableWriteTag"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@radix-ui/react-label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { BAUD_RATE_OPTIONS, SERIPORT, SOCKET_URL } from "./utils/constant"
+
+import "./AppDialog.css" // Add this import at the top (create this CSS file if not exist)
 
 // Types
 export interface Tag {
@@ -47,15 +49,16 @@ export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
 
-  const [tableWriteTag, setTableWriteTag] = useState<boolean>(true)
   const [writeDialogOpen, setWriteDialogOpen] = useState(false)
-  const [epcInput, setEpcInput] = useState("")
-  const [writeParams, setWriteParams] = useState<any>(null)
-  const [writeResult, setWriteResult] = useState<any>(null)
+  const [newEpcTags, setNewEpcTags] = useState<string>("")
+  const [writeResults, setWriteResults] = useState<any[]>([])
   const [writeLoading, setWriteLoading] = useState(false)
-  const [detectedEPCs, setDetectedEPCs] = useState<string[]>([])
-  const [selectedEPC, setSelectedEPC] = useState<string>("")
-  const [epcScanLoading, setEpcScanLoading] = useState(false)
+
+  // For file upload and write
+  const [fileEpcRows, setFileEpcRows] = useState<string[]>([])
+  const [fileLog, setFileLog] = useState<{ epc: string; success: boolean; result_msg: string }[]>([])
+  const [fileLoading, setFileLoading] = useState(false)
+
   const [selectedAntennas, setSelectedAntennas] = useState<number[]>([1])
   // Antenna settings
   const [antennaSettings, setAntennaSettings] = useState<AntennaSettings>({
@@ -68,7 +71,6 @@ export default function Dashboard() {
   // --- WebSocket state ---
   const socketRef = useRef<Socket | null>(null)
   const tagMapRef = useRef<Map<string, Tag>>(new Map())
-
 
   useEffect(() => {
     const socket = io(SOCKET_URL, {
@@ -165,6 +167,7 @@ export default function Dashboard() {
     setTotalTags(0)
     setTimer("00:00:00")
     setElapsedMs(0)
+    
     setIsInventoryRunning(false)
   }
 
@@ -214,78 +217,141 @@ export default function Dashboard() {
     }))
   }
 
-  const handleWriteEPC = async () => {
-    setWriteDialogOpen(true)
-    setEpcInput("")
-    setWriteParams(null)
-    setWriteResult(null)
-    setDetectedEPCs([])
-    setSelectedEPC("")
-    setEpcScanLoading(true)
-    try {
-      await startInventory(selectedAntennas)
-      setTimeout(async () => {
-        await stopInventory()
-        // Use fetch directly for /api/get_tags as there is no apiCall for this
-        const res = await startInventory(selectedAntennas)
-        const data = await res.json()
-        const epcs = Array.isArray(data.data) ? Array.from(new Set(data.data.map((t: any) => String(t.epc)))) as string[] : []
-        setDetectedEPCs(epcs)
-        setSelectedEPC(typeof epcs[0] === "string" ? epcs[0] : "")
-        setEpcScanLoading(false)
-      }, 2000)
-    } catch (e) {
-      setEpcScanLoading(false)
-      setDetectedEPCs([])
+  // Handle file upload and parse XLSX/CSV
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      const data = evt.target?.result
+      if (!data) return
+      let rows: string[] = []
+      if (file.name.endsWith(".csv")) {
+        // Simple CSV: split by line, take first column
+        const text = data as string
+        rows = text
+          .split(/\r?\n/)
+          .map(line => line.split(",")[0]?.trim())
+          .filter(Boolean)
+      } else {
+        // XLSX: use SheetJS
+        const workbook = XLSX.read(data, { type: "binary" })
+        const sheet = workbook.Sheets[workbook.SheetNames[0]]
+        const json = XLSX.utils.sheet_to_json<{ [k: string]: any }>(sheet, { header: 1 })
+        rows = (json as any[][])
+          .map(row => row[0]?.toString().trim())
+          .filter(Boolean)
+      }
+      setFileEpcRows(rows.slice(0, 100)) // limit to 100 for safety
+      setFileLog([])
+    }
+    if (file.name.endsWith(".csv")) {
+      reader.readAsText(file)
+    } else {
+      reader.readAsBinaryString(file)
     }
   }
 
-  const handleSubmitWrite = async () => {
-    if (!epcInput.trim() || !selectedEPC) {
-      toast("Vui lòng chọn EPC và nhập EPC mới", { style: { background: "#ef4444", color: "#fff" } })
-      return
-    }
-    setWriteLoading(true)
-    const params = {
-      antennaMask: 1,
-      dataArea: 1,
-      startWord: 2,
-      epcHex: epcInput.trim().toUpperCase(),
-    }
-    setWriteParams(params)
+  // Write a single EPC from file table
+  const handleWriteFileEpc = async (epc: string) => {
+    setFileLoading(true)
     try {
-      // Use WriteEPCtag from rfid.ts
+      const params = {
+        antennaMask: 1,
+        dataArea: 1,
+        startWord: 2,
+        epcHex: epc.toUpperCase(),
+      }
       const data = await WriteEPCtag(
         params.antennaMask,
         params.dataArea,
         params.startWord,
         params.epcHex,
-        selectedEPC,
         undefined,
-        2.0
+        undefined,
+        1
       )
-      setWriteResult({
-        success: data.success,
-        result_code: data.result_code ?? (data.success ? 0 : -1),
-        result_msg: data.result_msg || data.message || (data.success ? "Write successfully" : "Write failed"),
-        failed_addr: data.failed_addr ?? null,
-      })
-      if (data.success) {
-        toast("Ghi EPC thành công", { description: "EPC đã được ghi vào tag" })
-        setWriteDialogOpen(false)
-      } else {
-        toast("Ghi EPC thất bại", { description: data.result_msg || data.message || "Write failed", style: { background: "#ef4444", color: "#fff" } })
-      }
+      setFileLog(prev => [
+        ...prev,
+        { epc, success: data.success, result_msg: data.result_msg || data.message }
+      ])
+      toast(data.success ? "Ghi thành công" : "Ghi thất bại", { description: epc })
     } catch (e: any) {
-      setWriteResult({
-        success: false,
-        result_code: -99,
-        result_msg: e?.message || "Exception",
-        failed_addr: null,
-      })
-      toast("Không thể ghi EPC tag.", { description: "Lỗi", style: { background: "#ef4444", color: "#fff" } })
+      setFileLog(prev => [
+        ...prev,
+        { epc, success: false, result_msg: e?.message || "Exception" }
+      ])
+      toast("Ghi thất bại", { description: epc, style: { background: "#ef4444", color: "#fff" } })
     }
+    setFileLoading(false)
+  }
+
+  const handleStartWrite = async () => {
+    setWriteLoading(true)
+    setWriteResults([])
+    const epcList = newEpcTags
+      .split("\n")
+      .map(e => e.trim())
+      .filter(e => e.length > 0)
+    if (epcList.length === 0) {
+      toast("Vui lòng nhập ít nhất 1 EPC mới", { style: { background: "#ef4444", color: "#fff" } })
+      setWriteLoading(false)
+      return
+    }
+    const results: any[] = []
+    for (const epc of epcList) {
+      try {
+        const params = {
+          antennaMask: 1,
+          dataArea: 1,
+          startWord: 2,
+          epcHex: epc.toUpperCase(),
+        }
+        // WriteEPCtag API expects single EPC, match_epc can be null for auto
+        const data = await WriteEPCtag(
+          params.antennaMask,
+          params.dataArea,
+          params.startWord,
+          params.epcHex,
+          undefined,
+          undefined,
+          1 // timeout=1s for fast batch
+        )
+        results.push({
+          epc,
+          ...data,
+        })
+      } catch (e: any) {
+        results.push({
+          epc,
+          success: false,
+          result_code: -99,
+          result_msg: e?.message || "Exception",
+        })
+      }
+      // Optional: small delay between writes
+      await new Promise(res => setTimeout(res, 200))
+    }
+    setWriteResults(results)
     setWriteLoading(false)
+    toast("Đã ghi xong danh sách EPC", { description: "Batch Write" })
+  }
+
+  const handleCheckWrite = async (epcHex:string) => {
+    // const data = await CheckWriteEPC(epcHex,1)
+    // if (data.success) {
+    //   toast("Kiểm tra ghi thành công", { description: "Check Write" })
+    //   setWriteResults(data.results || [])
+    // } else {
+    //   toast("Kiểm tra ghi thất bại: " + data.message, {
+    //     description: "Check Write",
+    //     style: { background: "#ef4444", color: "#fff" },
+    //   })
+    // }
+    toast("Chức năng kiểm tra ghi chưa được triển khai", {
+      description: "Check Write",
+      style: { background: "#fff", color: "#111" },
+    })
   }
 
   return (
@@ -380,7 +446,7 @@ export default function Dashboard() {
                   onStart={handleStartInventory}
                   onStop={handleStopInventory}
                   onClear={handleClear}
-                  writeEPC={handleWriteEPC}
+                  writeEPC={() => setWriteDialogOpen(true)}
                 />
               </div>
             </div>
@@ -396,70 +462,135 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Write EPC Dialog */}
+            {/* --- File Upload & Write EPC Dialog Section --- */}
             <Dialog open={writeDialogOpen} onOpenChange={setWriteDialogOpen}>
-              <DialogContent>
+              <DialogContent className="custom-dialog-content">
                 <DialogHeader>
-                  <DialogTitle>Ghi EPC vào Tag</DialogTitle>
+                  <DialogTitle>Ghi nhiều EPC vào Tag / Upload file EPC</DialogTitle>
                 </DialogHeader>
                 <DialogDescription>
-                  {epcScanLoading ? (
-                    <div className="text-center py-4">Đang quét thẻ... Vui lòng chờ 2 giây.</div>
-                  ) : (
-                    <>
-                      <div className="space-y-2">
-                        <Label htmlFor="epc-select">Chọn EPC hiện tại</Label>
-                        <Select
-                          value={selectedEPC}
-                          onValueChange={setSelectedEPC}
-                          disabled={epcScanLoading || detectedEPCs.length === 0}
-                        >
-                          <SelectTrigger id="epc-select" className="w-full">
-                            <SelectValue placeholder="Chọn EPC" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {detectedEPCs.length === 0 ? (
-                              <SelectItem value="" disabled>
-                                Không tìm thấy EPC nào
-                              </SelectItem>
-                            ) : (
-                              detectedEPCs.map(epc => (
-                                <SelectItem key={epc} value={epc}>
-                                  {epc}
-                                </SelectItem>
-                              ))
-                            )}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2 mt-2">
-                        <Label htmlFor="epc-input">EPC mới</Label>
-                        <Input
-                          id="epc-input"
-                          value={epcInput}
-                          onChange={e => setEpcInput(e.target.value)}
-                          placeholder="Nhập EPC mới"
-                          disabled={writeLoading}
-                          autoFocus
-                        />
-                      </div>
-                    </>
+                  {/* <div className="space-y-2">
+                    <Label htmlFor="epc-list-input">Danh sách EPC mới (mỗi dòng 1 EPC)</Label>
+                    <textarea
+                      id="epc-list-input"
+                      value={newEpcTags}
+                      onChange={e => setNewEpcTags(e.target.value)}
+                      placeholder="Nhập mỗi EPC trên 1 dòng"
+                      rows={6}
+                      className="w-full border rounded px-2 py-1 text-sm font-mono"
+                      disabled={writeLoading}
+                    />
+                  </div> */}
+                  <div className="my-4">
+                    <div className="mb-2 text-black font-semibold"> Upload file EPC (xlsx/csv)</div>
+             
+                    <input
+                    className="w-full text-sm  rounded border border-gray-300 cursor-pointer focus:outline-none"
+                    type="file"
+                    accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel"
+                    onChange={handleFileChange}
+                    disabled={fileLoading}
+                  />
+                
+                  </div>
+                  {fileEpcRows.length > 0 && (
+                    <div className="mt-4">
+                      <div className="mb-2 font-medium">Danh sách EPC từ file:</div>
+                      <table className="w-full text-xs text-black border mb-2">
+                        <thead>
+                          <tr>
+                            <th className="border px-2 py-1">Number</th>
+                            <th className="border px-2 py-1">EPC (hex)</th>
+                            <th className="border py-2 ">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fileEpcRows.map((epc, idx) => (
+                            <tr key={idx}>
+                              <td className="border px-2 py-1">{idx + 1}</td>
+                              <td className="border px-2 py-1 font-semibold">{epc}</td>
+                              <td className="border px-2 py-1">
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleWriteFileEpc(epc)}
+                                  disabled={fileLoading}
+                                >
+                                  Write
+                                </Button>
+                                <Button
+                    variant="outline"
+                    onClick={() => handleCheckWrite(newEpcTags)}
+                    disabled={writeLoading}
+                  >
+                    Check
+                  </Button>
+                              </td>
+                              
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className="mb-2 font-medium">Log kết quả ghi:</div>
+                      <table className="w-full text-xs border">
+                        <thead>
+                          <tr>
+                            <th className="border px-2 py-1">EPC</th>
+                            <th className="border px-2 py-1">Result</th>
+                            <th className="border px-2 py-1">Message</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fileLog.map((log, idx) => (
+                            <tr key={idx}>
+                              <td className="border px-2 py-1 font-mono">{log.epc}</td>
+                              <td className="border px-2 py-1">{log.success ? "✅" : "❌"}</td>
+                              <td className="border px-2 py-1">{log.result_msg}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </DialogDescription>
                 <DialogFooter>
-                  <Button
-                    onClick={handleSubmitWrite}
-                    disabled={writeLoading || epcScanLoading || !epcInput.trim() || !selectedEPC}
+                  {/* <Button
+                    onClick={handleStartWrite}
+                    disabled={writeLoading || (!newEpcTags.trim() && fileEpcRows.length === 0)}
                   >
-                    {writeLoading ? "Đang ghi..." : "Ghi EPC"}
+                    {writeLoading ? "Đang ghi..." : "Start Write"}
                   </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => handleCheckWrite(newEpcTags)}
+                    disabled={writeLoading}
+                  >
+                    Check
+                  </Button> */}
                   <Button variant="outline" onClick={() => setWriteDialogOpen(false)} disabled={writeLoading}>
                     Đóng
                   </Button>
                 </DialogFooter>
-                {(writeParams || writeResult) && (
+                {writeResults.length > 0 && (
                   <div className="mt-4">
-                    <TableWriteTag params={writeParams || {}} result={writeResult} />
+                    <div className="font-semibold mb-2">Kết quả ghi EPC:</div>
+                    <table className="w-full text-xs border">
+                      <thead>
+                        <tr>
+                          <th className="border px-2 py-1">EPC</th>
+                          <th className="border px-2 py-1">Result</th>
+                          <th className="border px-2 py-1">Message</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {writeResults.map((r, i) => (
+                          <tr key={i}>
+                            <td className="border px-2 py-1 font-mono">{r.epc}</td>
+                            <td className="border px-2 py-1">{r.success ? "✅" : "❌"}</td>
+                            <td className="border px-2 py-1">{r.result_msg || r.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </DialogContent>
