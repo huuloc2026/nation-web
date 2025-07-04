@@ -38,18 +38,9 @@ class Config:
     MAX_TAGS_DISPLAY = 100  # Số lượng tags tối đa hiển thị
     AUTO_REFRESH_INTERVAL = 5000  # Tự động làm mới (ms)
     
-    # Profile Configurations
-    PROFILE_CONFIGS = {
-        0: "40kHz, FM0, Tari 25μs",
-        1: "250kHz, Miller4, Tari 25μs",
-        2: "300kHz, Miller4, Tari 25μs",
-        3: "400kHz, FM0, Tari 6.25μs",
-        4: "320kHz, Miller4, Tari 25μs"
-    }
-    
     # Antenna Configuration
     MAX_ANTENNAS = 4
-    DEFAULT_ANTENNA_POWER = 20  # dBm
+    DEFAULT_ANTENNA_POWER = 12  # dBm
     
     # Power Configuration
     MIN_POWER = 0

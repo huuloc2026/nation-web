@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Input } from "@/components/ui/input"
 import { Label } from "@radix-ui/react-label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { BAUD_RATE_OPTIONS, SERIPORT, SOCKET_URL } from "./utils/constant"
 
 // Types
 export interface Tag {
@@ -36,8 +37,8 @@ export interface AntennaSettings {
 
 export default function Dashboard() {
   const [isConnected, setIsConnected] = useState(false)
-  const [serialPort, setSerialPort] = useState("/dev/ttyUSB1")
-  const [baudRate, setBaudRate] = useState("115200")
+  const [serialPort, setSerialPort] = useState(SERIPORT)
+  const [baudRate, setBaudRate] = useState(BAUD_RATE_OPTIONS)
   const [detectedTags, setDetectedTags] = useState(0)
   const [totalTags, setTotalTags] = useState(0)
   const [timer, setTimer] = useState("00:00:00")
@@ -70,7 +71,7 @@ export default function Dashboard() {
 
 
   useEffect(() => {
-    const socket = io(import.meta.env.VITE_WS_URL ?? "http://localhost:3000", {
+    const socket = io(SOCKET_URL, {
       transports: ["websocket"],
       path: "/socket.io",
       withCredentials: false,
@@ -181,7 +182,6 @@ export default function Dashboard() {
 
   const handleGetPower = async () => {
     try {
-      // Replace with actual get power logic if available
       toast("Đã lấy thông tin công suất antennas.", {
         description: "Get Power",
       })
