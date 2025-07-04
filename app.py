@@ -10,7 +10,7 @@ from serial.tools import list_ports
 from collections import deque
 # from queue import Queue, Empty
 import logging
-import random
+
 
 
 
