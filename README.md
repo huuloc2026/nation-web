@@ -1,114 +1,114 @@
 # RFID Web Control Panel
 
-Ứng dụng web để điều khiển RFID reader Ex10 series với giao diện web và WebSocket real-time.
+A web application to control Ex10 series RFID readers with a web interface and real-time WebSocket support.
 
-## Tính năng
+## Features
 
-- **Kết nối RFID Reader**: Hỗ trợ kết nối qua serial port
+- **RFID Reader Connection**: Supports connection via serial port
 - **Inventory Operations**: 
-  - Start/Stop inventory với Target A/B
-  - Tags inventory với cấu hình tùy chỉnh (Q-value, Session, Antenna, Scan time)
-  - Real-time tag detection qua WebSocket
+  - Start/Stop inventory with Target A/B
+  - Tags inventory with customizable configuration (Q-value, Session, Antenna, Scan time)
+  - Real-time tag detection via WebSocket
 - **Reader Configuration**:
-  - Thiết lập RF power
-  - Bật/tắt buzzer
-  - Quản lý profile
-  - Cấu hình antenna
-- **Real-time Monitoring**: WebSocket để hiển thị tags và stats real-time
-- **Batch EPC Write**: Ghi nhiều EPC vào tag qua giao diện hoặc upload file (xlsx/csv)
-- **Beep on Write Success**: Khi ghi EPC thành công, trình duyệt sẽ phát âm thanh beep (`public/beep.mp3`)
+  - Set RF power
+  - Enable/disable buzzer
+  - Manage profiles
+  - Configure antennas
+- **Real-time Monitoring**: WebSocket for real-time tag and stats display
+- **Batch EPC Write**: Write multiple EPCs to tags via UI or upload file (xlsx/csv)
+- **Beep on Write Success**: When writing EPC is successful, the browser will play a beep sound (`public/beep.mp3`)
 
-## Cài đặt
+## Installation
 
-1. Cài đặt dependencies backend:
+1. Install backend dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
-2. Chạy backend Flask app:
+2. Run the backend Flask app:
    ```bash
    python app.py
    ```
 
-3. Cài đặt dependencies frontend:
+3. Install frontend dependencies:
    ```bash
    cd front-end
    npm install
    ```
 
-4. Chạy frontend (Vite):
+4. Run the frontend (Vite):
    ```bash
    npm run dev
    ```
-   Truy cập web UI tại: [http://localhost:5173](http://localhost:5173)
+   Access the web UI at: [http://localhost:5173](http://localhost:5173)
 
 ## API Endpoints
 
-### Kết nối
-- `POST /api/connect` - Kết nối reader
-- `POST /api/disconnect` - Ngắt kết nối reader
+### Connection
+- `POST /api/connect` - Connect to reader
+- `POST /api/disconnect` - Disconnect reader
 
 ### Inventory
-- `POST /api/start_inventory` - Bắt đầu inventory (Target A/B)
-- `POST /api/stop_inventory` - Dừng inventory
+- `POST /api/start_inventory` - Start inventory (Target A/B)
+- `POST /api/stop_inventory` - Stop inventory
 
-### Cấu hình
-- `GET /api/reader_info` - Lấy thông tin reader
-- `POST /api/set_power` - Thiết lập RF power
-- `POST /api/enable_antennas` - Bật antennas
-- `POST /api/disable_antennas` - Tắt antennas
-- `GET /api/get_antenna_power` - Lấy công suất antennas
+### Configuration
+- `GET /api/reader_info` - Get reader info
+- `POST /api/set_power` - Set RF power
+- `POST /api/enable_antennas` - Enable antennas
+- `POST /api/disable_antennas` - Disable antennas
+- `GET /api/get_antenna_power` - Get antenna power
 
 ### EPC Write
-- `POST /api/write_epc_tag_auto` - Ghi EPC vào tag (auto PC bits, word length)
-- `POST /api/check_write_epc` - Kiểm tra khả năng ghi EPC
+- `POST /api/write_epc_tag_auto` - Write EPC to tag (auto PC bits, word length)
+- `POST /api/check_write_epc` - Check EPC write capability
 
 ## WebSocket Events
 
 ### Client → Server
-- `connect` - Kết nối WebSocket
-- `disconnect` - Ngắt kết nối WebSocket
+- `connect` - Connect WebSocket
+- `disconnect` - Disconnect WebSocket
 
 ### Server → Client
-- `tag_detected` - Tag mới được phát hiện
-- `stats_update` - Cập nhật thống kê
-- `status` - Trạng thái kết nối
+- `tag_detected` - New tag detected
+- `stats_update` - Stats update
+- `status` - Connection status
 
-## Xử lý vấn đề Session Switching
+## Handling Session Switching Issues
 
-### Vấn đề thường gặp
-Khi chuyển đổi giữa các session (ví dụ: từ session 2 về session 0), có thể gặp các vấn đề:
-- Reader không phản hồi
+### Common Issues
+When switching between sessions (e.g., from session 2 to session 0), you may encounter:
+- Reader not responding
 - CRC error
-- Delay khi gọi lệnh đọc
-- Thread không dừng trong thời gian chờ
+- Delay when calling read commands
+- Thread not stopping within timeout
 
-### Giải pháp đã được cải thiện
+### Improved Solutions
 
-1. **Cải thiện hàm stop_inventory**:
-   - Gửi lệnh stop nhiều lần để đảm bảo reader nhận được
-   - Tăng thời gian chờ thread dừng (3 giây)
-   - Clear cả input và output buffer
-   - Force stop nếu thread không dừng
+1. **Improved stop_inventory function**:
+   - Send stop command multiple times to ensure reader receives it
+   - Increase wait time for thread to stop (3 seconds)
+   - Clear both input and output buffers
+   - Force stop if thread does not stop
 
-2. **Cải thiện hàm start_inventory**:
-   - Tăng thời gian chờ giữa các lần start (1 giây)
-   - Clear buffer trước khi start
-   - Thêm delay để reader ổn định
+2. **Improved start_inventory function**:
+   - Increase wait time between starts (1 second)
+   - Clear buffer before starting
+   - Add delay for reader stabilization
 
-3. **Cải thiện hàm start_tags_inventory**:
-   - Thêm timeout để tránh bị treo
-   - Clear cả input và output buffer
-   - Tăng thời gian chờ để reader ổn định
-   - Thêm delay sau khi gửi lệnh
+3. **Improved start_tags_inventory function**:
+   - Add timeout to avoid hanging
+   - Clear both input and output buffers
+   - Increase wait time for reader stabilization
+   - Add delay after sending command
 
 4. **API Reset Reader**:
-   - Reset hoàn toàn reader khi cần thiết
-   - Clear tất cả buffers
-   - Gửi lệnh stop nhiều lần
-   - Đợi reader ổn định
+   - Fully reset reader when needed
+   - Clear all buffers
+   - Send stop command multiple times
+   - Wait for reader to stabilize
 
-## Cấu trúc project
+## Project Structure
 
 ```
 nation-web/
@@ -127,8 +127,8 @@ nation-web/
 
 ## Beep on EPC Write Success
 
-- Khi ghi EPC thành công (qua giao diện hoặc upload file), trình duyệt sẽ phát âm thanh beep (`public/beep.mp3`).
-- Đảm bảo file `beep.mp3` tồn tại trong thư mục `front-end/public/`.
+- When writing EPC is successful (via UI or file upload), the browser will play a beep sound (`public/beep.mp3`).
+- Make sure the `beep.mp3` file exists in the `front-end/public/` directory.
 
 ## License
 
