@@ -15,24 +15,32 @@
   - Quản lý profile
   - Cấu hình antenna
 - **Real-time Monitoring**: WebSocket để hiển thị tags và stats real-time
+- **Batch EPC Write**: Ghi nhiều EPC vào tag qua giao diện hoặc upload file (xlsx/csv)
+- **Beep on Write Success**: Khi ghi EPC thành công, trình duyệt sẽ phát âm thanh beep (`public/beep.mp3`)
 
 ## Cài đặt
 
-1. Cài đặt dependencies:
-```bash
-pip install -r requirements.txt
-```
+1. Cài đặt dependencies backend:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-2. Chạy ứng dụng:
-```bash
-python app.py
-```
-3. Chạy ứng dụng:
-```bash
-cd frontend && npm i
-```
-4. Truy cập web UI tại: `http://localhost:5173`
+2. Chạy backend Flask app:
+   ```bash
+   python app.py
+   ```
 
+3. Cài đặt dependencies frontend:
+   ```bash
+   cd front-end
+   npm install
+   ```
+
+4. Chạy frontend (Vite):
+   ```bash
+   npm run dev
+   ```
+   Truy cập web UI tại: [http://localhost:5173](http://localhost:5173)
 
 ## API Endpoints
 
@@ -51,7 +59,9 @@ cd frontend && npm i
 - `POST /api/disable_antennas` - Tắt antennas
 - `GET /api/get_antenna_power` - Lấy công suất antennas
 
-
+### EPC Write
+- `POST /api/write_epc_tag_auto` - Ghi EPC vào tag (auto PC bits, word length)
+- `POST /api/check_write_epc` - Kiểm tra khả năng ghi EPC
 
 ## WebSocket Events
 
@@ -98,20 +108,28 @@ Khi chuyển đổi giữa các session (ví dụ: từ session 2 về session 0
    - Gửi lệnh stop nhiều lần
    - Đợi reader ổn định
 
-
 ## Cấu trúc project
 
 ```
-nation-web-app/
+nation-web/
 ├── app.py              # Flask application
-├── nation.py               # RFID reader SDK
+├── nation.py           # RFID reader SDK
 ├── config.py           # Configuration
 ├── requirements.txt    # Dependencies
 ├── front-end/
-│   └── App.tsx     # Web interface
-└── README.md          # Documentation
+│   ├── src/
+│   │   ├── App.tsx         # Web interface (React)
+│   │   └── ...             # Other frontend files
+│   └── public/
+│       └── beep.mp3        # Beep sound for write success
+└── README.md           # Documentation
 ```
+
+## Beep on EPC Write Success
+
+- Khi ghi EPC thành công (qua giao diện hoặc upload file), trình duyệt sẽ phát âm thanh beep (`public/beep.mp3`).
+- Đảm bảo file `beep.mp3` tồn tại trong thư mục `front-end/public/`.
 
 ## License
 
-MIT License 
+MIT License

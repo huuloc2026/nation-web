@@ -264,6 +264,7 @@ export function Sidebar({
       </div>
 
       <div className="flex-1 p-4 overflow-y-auto space-y-4">
+        
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
@@ -328,6 +329,29 @@ export function Sidebar({
           </CardContent>
         </Card>
 
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Activity className="h-4 w-4" />
+              Reader Information
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+          {infoLoading ? (
+            <div className="text-sm text-muted-foreground">Loading...</div>
+          ) : readerInfo ? (
+            Object.entries(readerInfo).map(([k, v]) => (
+              <div key={k} className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">{k}:</span>
+                <span className="text-sm font-medium">{String(v)}</span>
+              </div>
+            ))
+          ) : (
+            <div className="text-sm text-muted-foreground">No reader info</div>
+          )}
+        </CardContent>
+        </Card>
 
  {/* Baseband Configuration Card */}
  <Card>
@@ -409,39 +433,19 @@ export function Sidebar({
       </div>
     </div>
     <div className="flex gap-2">
-      <Button size="sm" onClick={handleConfigureBaseband} className="flex-1" disabled={basebandLoading}>
-        {basebandLoading ? "Đang gửi..." : "Set Baseband"}
-      </Button>
+     
       <Button size="sm" variant="outline" onClick={handleQueryBasebandProfile} className="flex-1" disabled={basebandLoading}>
         {basebandLoading ? "Đang lấy..." : "Get Baseband"}
+      </Button>
+      <Button size="sm" onClick={handleConfigureBaseband} className="flex-1" disabled={basebandLoading}>
+        {basebandLoading ? "Đang gửi..." : "Set Baseband"}
       </Button>
     </div>
 
   </CardContent>
 </Card>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Activity className="h-4 w-4" />
-              Reader Information
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-          {infoLoading ? (
-            <div className="text-sm text-muted-foreground">Loading...</div>
-          ) : readerInfo ? (
-            Object.entries(readerInfo).map(([k, v]) => (
-              <div key={k} className="flex justify-between items-center">
-                <span className="text-sm text-muted-foreground">{k}:</span>
-                <span className="text-sm font-medium">{String(v)}</span>
-              </div>
-            ))
-          ) : (
-            <div className="text-sm text-muted-foreground">No reader info</div>
-          )}
-        </CardContent>
-        </Card>
+       
 
         <Card>
           <CardHeader className="pb-3">
